@@ -1,0 +1,51 @@
+{
+  "folders": [
+    {
+      "path": ".."
+    }
+  ],
+  "settings": {
+    "files.eol": "\n",
+    "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python",
+    "biome.lsp.bin": "frontend/node_modules/.bin/biome",
+    "[javascript][javascriptreact][json][jsonc]": {
+      "editor.defaultFormatter": "biomejs.biome",
+      "editor.formatOnSave": true
+    },
+    "editor.codeActionsOnSave": {
+      "source.organizeImports.biome": "explicit"
+    }
+  },
+  "launch": {
+    "configurations": [
+      {
+        "name": "compose: up",
+        "type": "node-terminal",
+        "request": "launch",
+        "command": "docker compose up --build",
+        "cwd": "${workspaceFolder}"
+      },
+      {
+        "name": "db (docker)",
+        "type": "node-terminal",
+        "request": "launch",
+        "command": "docker compose up db",
+        "cwd": "${workspaceFolder}"
+      },
+      {
+        "name": "backend (local)",
+        "type": "node-terminal",
+        "request": "launch",
+        "command": "test -x .venv/bin/uv || (python3 -m venv .venv && .venv/bin/python -m pip install --upgrade pip uv) && .venv/bin/uv run uvicorn app.server:local_factory --factory --reload",
+        "cwd": "${workspaceFolder}/backend"
+      },
+      {
+        "name": "frontend (local)",
+        "type": "node-terminal",
+        "request": "launch",
+        "command": "npm install && npm run dev",
+        "cwd": "${workspaceFolder}/frontend"
+      }
+    ]
+  }
+}
