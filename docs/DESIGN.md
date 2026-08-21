@@ -210,7 +210,7 @@ Template sites, answers computed by hand:
 - the floor-count rules on their own: the 9.6 / 3.2 tolerance, one limit acting alone, at least one limit required;
 - the read-time derivation of a saved result matches the fresh computation (see "Derived values").
 
-The API layer is tested too: an end-to-end scenario — create a site, a root, a branch from it, read the tree; seeding of the template sites into an empty database; a check that the preview adds no rows to the database; error codes — 422 (polygon, value bounds, parent_id from another site) and 404.
+The API layer is tested too: an end-to-end scenario — create a site, a root, a branch from it, read the tree; seeding of the template sites into an empty database; a check that the preview adds no rows to the database; error codes — 422 (polygon, value bounds, name length, parent_id from another site) and 404.
 
 ## API contract
 
@@ -225,6 +225,7 @@ REST over JSON, prefix /api/v1 (room for future versions — already in the scaf
 | GET /sites/{id}/options | all options of a site as a flat list |
 | GET /options/{id} | one option |
 | POST /massing/preview | the same computation without saving: site_id + constraints; nothing is written |
+| GET /health | liveness check from the scaffold; the health mark in the top panel polls it |
 
 Decisions:
 
@@ -287,7 +288,7 @@ The response:
 }
 ```
 
-Errors: 422 — a broken polygon, values out of bounds, or a parent_id that is missing or from another site; 404 — no such site or option. Every error body is { detail } with a single human-readable string, whichever layer rejected the request. The **infeasible** verdict is not an error (see "Input error or the infeasible verdict" in Algorithm).
+Errors: 422 — a broken polygon, values out of bounds, a name outside 1 to 30 characters, or a parent_id that is missing or from another site; 404 — no such site or option. Every error body is { detail } with a single human-readable string, whichever layer rejected the request. The **infeasible** verdict is not an error (see "Input error or the infeasible verdict" in Algorithm).
 
 ## Visualization
 

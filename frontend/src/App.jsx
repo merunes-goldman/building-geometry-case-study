@@ -131,6 +131,7 @@ export default function App() {
   }, [siteId, form, dirty]);
 
   function selectOption(option) {
+    previewNo.current += 1; // a preview still in flight must not overwrite the snapshot
     setSelected(option);
     setForm(fromConstraints(option.constraints));
     setName("");
@@ -146,6 +147,7 @@ export default function App() {
   }
 
   async function addOption() {
+    const no = siteNo.current; // the site can be switched while the save is in flight
     setSaving(true);
     try {
       const option = await createOption(siteId, {
@@ -153,11 +155,12 @@ export default function App() {
         parent_id: selected?.id ?? null,
         constraints: toConstraints(form),
       });
+      if (no !== siteNo.current) return;
       setOptions((all) => [...all, option]);
       selectOption(option);
       setError(null);
     } catch (e) {
-      setError(e.message);
+      if (no === siteNo.current) setError(e.message);
     } finally {
       setSaving(false);
     }

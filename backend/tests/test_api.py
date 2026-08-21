@@ -41,9 +41,10 @@ async def test_create_a_site_a_root_a_branch_and_read_the_tree(client: AsyncClie
     site_id = created.json()["id"]
     assert (await client.get(f"/sites/{site_id}")).json()["polygon"] == _RECTANGLE
 
-    response = await client.post(f"/sites/{site_id}/options", json={"name": "baseline", "constraints": _MODEST})
+    response = await client.post(f"/sites/{site_id}/options", json={"name": " baseline ", "constraints": _MODEST})
     assert response.status_code == 201
     root = response.json()
+    assert root["name"] == "baseline"  # stored stripped
     assert root["parent_id"] is None and root["result"]["verdict"] == "ok"
     assert root["result"]["metrics"]["floor_count"] == 6
     assert 600 - 0.2 <= root["result"]["metrics"]["footprint_area_m2"] <= 600

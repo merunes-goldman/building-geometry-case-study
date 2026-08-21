@@ -223,15 +223,14 @@ export default function Inspector({
           disabled={!selected?.parent_id}
         />
         {error && <Alert severity="error">{error}</Alert>}
-        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-          <Button
-            variant="contained"
-            onClick={onAdd}
-            disabled={saving || !result || Boolean(previewError)}
-          >
-            Add option
-          </Button>
-        </Stack>
+        <Button
+          variant="contained"
+          onClick={onAdd}
+          disabled={saving || !result || Boolean(previewError)}
+          sx={{ alignSelf: "flex-start" }}
+        >
+          Add option
+        </Button>
         <Typography variant="caption" color="text.secondary">
           {selected
             ? `The new option becomes a child of "${selected.name || "unnamed"}".`

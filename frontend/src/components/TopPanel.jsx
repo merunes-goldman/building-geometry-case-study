@@ -94,7 +94,7 @@ function CreateSiteDialog({ open, onClose, onCreate, saving }) {
         <Button
           onClick={submit}
           variant="contained"
-          disabled={saving || !name || !text}
+          disabled={saving || !name.trim() || !text.trim()}
         >
           Create
         </Button>

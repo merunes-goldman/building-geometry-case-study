@@ -14,7 +14,7 @@ async function request(path, body) {
   try {
     res = await fetch(`${API_BASE}/api/v1${path}`, {
       method: body ? "POST" : "GET",
-      headers: { "content-type": "application/json" },
+      headers: body ? { "content-type": "application/json" } : undefined,
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch {
