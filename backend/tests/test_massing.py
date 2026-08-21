@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.geometry.massing import Constraints, Polygon, PolygonError, compute_massing, derive
+from app.geometry.massing import Constraints, Polygon, PolygonError, compute_massing, derive, normalize_polygon
 
 # --- helpers: template data and small readers ---------------------------------------------------
 
@@ -150,6 +150,10 @@ def test_broken_polygons_are_rejected_with_a_reason(polygon: Polygon):
     with pytest.raises(PolygonError) as error:
         compute_massing(polygon, _example("modest"))
     assert str(error.value)
+
+
+def test_normalize_polygon_makes_the_ring_counter_clockwise_and_open():
+    assert normalize_polygon([(0, 0), (0, 25), (40, 25), (40, 0), (0, 0)]) == [(0, 0), (40, 0), (40, 25), (0, 25)]
 
 
 def test_floor_division_tolerance():

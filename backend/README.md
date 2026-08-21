@@ -25,11 +25,13 @@ A Postgres is expected at `APP_DATABASE_URL`. The easiest way is the root
 
 ## What's here / what's yours
 
-- `app/server.py` — FastAPI app, CORS, lifespan; creates + opens the DB connection pool.
-- `app/db.py` — async psycopg pool + `get_connection` dependency. **No ORM, no schema** — define
-  your own model types and write pure SQL.
-- `app/v1/routes/health.py` — `GET /api/v1/health`.
-- `app/geometry/` — empty domain module. **Build the massing algorithm + types here.**
+- `app/server.py` — FastAPI app, CORS, lifespan: opens the pool, applies the schema, seeds the template sites.
+- `app/db/` — `pool.py` (async psycopg pool + the `Connection` dependency), `schema.sql` (the two tables,
+  applied on every start, idempotent), `storage.py` (plain SQL; seeds an empty database with the template sites
+  from `APP_SITES_DIR`). No ORM, no migration tool.
+- `app/geometry/massing.py` — the massing algorithm and its types (pure, no IO).
+- `app/models.py` — request and response shapes.
+- `app/v1/routes/` — `health`, `sites`, `options`, `massing` (preview); the contract is in `docs/DESIGN.md`.
 
 You own: the domain model, the algorithm, the persistence schema (saved options +
 the decision tree), migrations, the API contract, and tests.
@@ -37,7 +39,7 @@ the decision tree), migrations, the API contract, and tests.
 ## Commands
 
 ```bash
-uv run pytest                              # tests
+uv run pytest                              # tests (the API tests use a `casestudy_test` database on the same server)
 uv run pytest --cov=app --cov-report=term-missing
 uv run ruff check . && uv run ruff format .
 uv run pyright
@@ -52,3 +54,4 @@ uv run app generate-openapi                # -> docs/openapi.json
 | `APP_DEBUG` | `false` | FastAPI debug mode |
 | `APP_ALLOWED_ORIGINS` | `*` | CORS origins, semicolon-separated |
 | `APP_DATABASE_URL` | `postgresql://postgres:postgres@localhost:5432/casestudy` | libpq connection string (psycopg) |
+| `APP_SITES_DIR` | `../data/sites` | template sites seeded into an empty database |

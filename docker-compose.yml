@@ -23,6 +23,9 @@ services:
       APP_DEBUG: "true"
       APP_ALLOWED_ORIGINS: "http://localhost:5173"
       APP_DATABASE_URL: "postgresql://postgres:postgres@db:5432/casestudy"
+      APP_SITES_DIR: "/data/sites"
+    volumes:
+      - ./data/sites:/data/sites:ro
     depends_on:
       db:
         condition: service_healthy
