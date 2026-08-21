@@ -314,7 +314,36 @@ The layout is Figma-like: the canvas with the plan takes the whole screen, and t
 
 ## Assumptions & trade-offs
 
-The decisions you made under ambiguity, and what you consciously traded away.
+**Data model:**
+
+- A site and an option are immutable: a new polygon is a new site, an edit of an option is a new branch. Deletion and archiving — roadmap.
+- An option is self-contained: the full set of constraints, not a diff from the parent; the price is a few numbers duplicated between options.
+- From the result only the product of the geometry is stored — the footprint and the split flag; the metrics and the verdict are formulas over it, recomputed on read. The asymmetry is deliberate: the stored footprint will not change when the geometry code is updated, while the metrics, when a formula changes, recompute across the whole history — at once and identically. Freezing the metrics at write time was rejected in favour of a narrow table; full protection from logic changes is algorithm versioning (roadmap).
+- Trees are small — tens of options per site; large ones — roadmap.
+- There is no user in the model: no accounts, no permissions, all data is shared. Accounts and collaboration — roadmap.
+
+**API:**
+
+- The computation runs right in the request handler and blocks the event loop; acceptable for a single user, moving it to separate processes — roadmap ("Scale").
+
+**Interface:**
+
+- Top-down view instead of 3D: with identical floors the volume carries no new data and is expensive. The 3D view — roadmap.
+- Option comparison is the metrics in the list rows and the parent overlay on the plan; comparing any two options — roadmap.
+- The site is always fitted into the window whole; pan and zoom — roadmap.
+- The panels are fixed: no hiding, no dragging; hiding — roadmap.
+
+**Algorithm:**
+
+- The building occupies the whole footprint, whatever its shape: an L-shaped footprint gives an L-shaped building. There are no buildings with a shape of their own fitted inside the footprint — roadmap. All floors are identical and above ground, so GFA = footprint area * floor count; underground floors — roadmap.
+- A single setback for the whole perimeter; per-side setbacks — roadmap.
+- The site is flat; terrain — roadmap.
+- The site polygon is a single ring without holes; holes — zones inside the site where building is not allowed — roadmap.
+- One building: when the footprint splits, only the largest part is built on; multiple buildings — roadmap.
+- The additional inset for site coverage is uniform from all sides; choosing a side — roadmap.
+- The 1 sq. m sliver threshold is an arbitrary value from the safe range (see "Sliver threshold"); it also eats real footprints below one square metre. Narrow but large footprints pass (a 16x1 m strip is **feasible**); minimum footprint width — roadmap.
+- The GFA target is a reference for comparison, not an optimizer; fitting the constraints to the target — roadmap.
+- Ready-made geometry instead of an own one — see the library table in Algorithm.
 
 ## Edge cases
 
