@@ -35,7 +35,7 @@ Out of scope — all in the roadmap:
 - 3D view
 - branch archiving and option renaming (see "Tree rules")
 - algorithm versioning (a stored option remembers which version of the computation produced it)
-- scale: metric columns for SQL search and sorting, paged tree loading, the CPU-bound computation moved to worker processes
+- scale: dedicated SQL columns for the metrics, paged trees, worker processes for the computation
 - user accounts and collaboration
 - exporting the result to other tools
 - site polygon with holes: zones inside the site where building is not allowed
@@ -133,13 +133,13 @@ The choice: **Shapely** — one dependency covers the inset, the validation and 
 ### Computation steps
 
 1. **Polygon validation.** The polygon must be usable: at least three vertices, non-zero area, no self-intersections. A broken polygon is rejected with an explanation of the reason — no silent fixing.
-2. **Setback.** Inset the polygon inwards by the setback — this gives the buildable footprint. Corners stay sharp, no rounding: the setback border follows the turns of the site border. Three outcomes: a normal footprint — continue; nothing left — the verdict is **infeasible**; the footprint split into parts — build on the largest one and raise the **footprint split** flag (slivers are removed before the split analysis — see "Sliver threshold" below). Part areas are compared with a tolerance (square millimetres). If several parts tie for the largest, take the one whose left edge is furthest left; if the left edges match too, the one whose bottom edge is lower. The only point of this rule is repeatability: without it the choice would depend on library internals.
+2. **Setback.** Inset the polygon inwards by the setback — this gives the buildable footprint. Corners stay sharp, no rounding: the setback border follows the turns of the site border. Three outcomes: a normal footprint — continue; nothing left — the verdict is **infeasible**; the footprint split into parts — build on the largest one and raise the **footprint split** flag (after sliver removal — see "Sliver threshold" below). Part areas are compared with a tolerance (square millimetres). If several parts tie for the largest, take the one whose left edge is furthest left; if the left edges match too, the one whose bottom edge is lower. The only point of this rule is repeatability: without it the choice would depend on library internals.
 3. **Site coverage.** If the coverage ratio is set and the footprint takes more than the allowed share of the site, shrink it further — the same inset operation — until it fits. Shrinking, not rejecting: the answer is "the most that can be built here", not "bad input". Details:
-   - the goal is to bring the footprint area to the allowed one: the coverage ratio times the site area (GFA is not involved). The allowed area is compared with the area of the largest part after sliver removal (see "Sliver threshold" below);
+   - the goal is to bring the footprint area to the allowed one: the coverage ratio times the site area (GFA is not involved). The allowed area is compared with the area of the kept part after sliver removal;
    - how far to shrink is found by binary search with millimetre precision; the precision, like the sliver threshold, is arbitrary — it only has to be far below any meaningful size on the plan;
    - this is not GFA auto-fit: here a mandatory rule has a single answer; auto-fit is in the roadmap;
    - why not scale the whole shape towards the centre: scaling would hit the target area in one step, but it moves points towards the centre, not away from the border — on a concave footprint a part of the outline could end up closer to the site border than the setback allows. The inset moves every point away from the border and cannot violate the setback;
-   - the additional inset, like the setback, can split the footprint; then the rule of step 2 applies — the largest part and the flag. When the footprint splits, the area jumps, so the guarantee is "not above the limit", not exact equality;
+   - the additional inset, like the setback, can split the footprint; then the rule of step 2 applies — the kept part and the flag. When the footprint splits, the area jumps, so the guarantee is "not above the limit", not exact equality;
    - if the allowed area is below the sliver threshold, the additional inset destroys the footprint — the verdict is **infeasible**.
 4. **Floor count.**
    - The height limit is converted into **floors by height**: divide it by the floor-to-floor height and drop the fraction — 24 / 3.5 gives 6 (the division uses a small tolerance: without it 9.6 / 3.2 would give 2 floors instead of 3 because of floating point).
@@ -148,19 +148,17 @@ The choice: **Shapely** — one dependency covers the inset, the validation and 
 5. **Metrics.** Footprint area, floor count, building height, GFA — and, for reference, coverage and FAR. The formulas are listed in "Derived values" below; one thing to state here: a floor occupies the whole footprint, so the floor area is the footprint area.
 6. **Verdict.** One of three: **feasible** — there is a building, and the GFA target (if set) is reached; **GFA target missed** — there is a building, but the GFA target is not reached, with the exact shortfall in sq. m; **infeasible** — with the reason: the footprint is gone, or no floor fits.
 
-Step 2 in one picture — the setback on the notched template site:
+Step 2 in one picture — the notched template site with the footprint after the setback drawn inside it:
 
 ```
-the notched site                    the footprint after the setback
-
-+------+          +------+          +----+          +----+
-|      |          |      |          |####|          |    |
-|      +----------+      |    ->    |####|          |    |
-|                        |          +----+          +----+
-+------------------------+
++---------+     +---------+
+| +-----+ |     | +-----+ |
+| |#####| +-----+ |     | |
+| +-----+         +-----+ |
++-------------------------+
 ```
 
-The neck is gone and the footprint split; the parts tie for the largest, so the leftmost (#) is kept, and the **footprint split** flag is raised.
+The setback shrinks the outline from every side: the neck is gone and the footprint split into two parts. They tie for the largest, so the leftmost (#) is kept, and the **footprint split** flag is raised.
 
 The result: the footprint polygon, the metrics, the verdict with its reason and the **footprint split** flag. The polygon goes to the frontend for drawing and to the database as the option snapshot.
 
@@ -206,7 +204,7 @@ Template sites, answers computed by hand:
 - broken polygons — a figure-eight self-intersection, two vertices, zero area — give an input error with an explanation;
 - a GFA target above the reachable maximum gives the **GFA target missed** verdict with the exact shortfall in sq. m.
 
-The API layer is tested too: an end-to-end scenario — create a site, a root, a branch from it, read the tree; seeding of the template sites into an empty database; a check that the preview adds no rows to the database; error codes — 422 (polygon, value bounds, parent_id from another site) and 404.
+The API layer is tested too: an end-to-end scenario — create a site, a root, a branch from it, read the tree; seeding of the template sites into an empty database; a check that the preview adds no rows to the database; a check that the read-time derivation matches a fresh computation (see "Derived values"); error codes — 422 (polygon, value bounds, parent_id from another site) and 404.
 
 ## API contract
 
@@ -307,8 +305,9 @@ The layout is Figma-like: the canvas with the plan takes the whole screen, and t
 
 ```
 +----------------------------------------------------------+
-| top panel: site selector, "Create site"                  |
-+----------------------------------------------------------+
+| +-------------------------------------------+            |
+| | top panel: site selector, "Create site"   |            |
+| +-------------------------------------------+            |
 |                                     +------------------+ |
 |                                     | option list      | |
 |   plan (full screen):               | indents = tree   | |
@@ -330,7 +329,7 @@ The layout is Figma-like: the canvas with the plan takes the whole screen, and t
 2. "Add option" saves the computation — as a child of the option selected in the list or, when nothing is selected, as a new root (the start of a new tree). The selection moves to the new option: the next edit branches from it.
 3. Clicking an option shows its snapshot from the database (the footprint, the metrics) and fills the form with its constraints; the preview turns on with the first manual edit — programmatic filling does not trigger a recomputation. "Start fresh" repeats the reset of a site switch: there is no snapshot left to protect.
 4. Comparison with the parent: a selected non-root option has the "Show parent" toggle — the parent's polygon is drawn dashed over the plan, its metrics appear as a second column in the inspector, and the changed constraints and differing metrics are highlighted. Comparing any two options — roadmap.
-5. The verdict on screen: **feasible** — the normal view; **GFA target missed** — a yellow banner with the shortfall; **infeasible** — a red banner with the reason. The footprint leaves the plan only when it is destroyed; with zero floors the footprint exists, is stored and is shown. With the **footprint split** flag a note next to the verdict says the building stands on the largest part — the rest of the footprint was dropped.
+5. The verdict on screen: **feasible** — the normal view; **GFA target missed** — a yellow banner with the shortfall; **infeasible** — a red banner with the reason. The footprint leaves the plan only when it is destroyed; with zero floors the footprint exists, is stored and is shown. With the **footprint split** flag a note next to the verdict says the building stands on the kept part — the rest of the footprint was dropped.
 6. Buttons that create data ("Add option", site creation) are disabled for the duration of the request; the loading is shown by a single shared indicator: frantic clicking creates no duplicates and breaks nothing. The preview does not lock the fields — that would kill the live recomputation; instead the plan gets a "recomputing" indicator, the requests are numbered, and a response with a stale number is dropped; no request cancellation is needed.
 7. Request errors: on a preview 422 the plan keeps the last valid footprint and the reason text is shown by the form; a failed save shows a banner with the text, and the buttons unlock.
 
@@ -358,7 +357,7 @@ The layout is Figma-like: the canvas with the plan takes the whole screen, and t
 
 - Top-down view instead of 3D: with identical floors the volume carries no new data and is expensive. The 3D view — roadmap.
 - Option comparison is the metrics in the list rows and the parent overlay on the plan; comparing any two options — roadmap.
-- The site is always fitted into the window whole; pan and zoom — roadmap.
+- The site is always fitted whole into the area free of panels; pan and zoom — roadmap.
 - The panels are fixed: no hiding, no dragging; hiding — roadmap.
 
 **Algorithm:**
@@ -367,7 +366,7 @@ The layout is Figma-like: the canvas with the plan takes the whole screen, and t
 - A single setback for the whole perimeter; per-side setbacks — roadmap.
 - The site is flat; terrain — roadmap.
 - The site polygon is a single ring without holes; holes — roadmap.
-- One building: when the footprint splits, only the largest part is built on; multiple buildings — roadmap.
+- One building: when the footprint splits, only the kept part is built on (the rule is in Algorithm, step 2); multiple buildings — roadmap.
 - The additional inset for site coverage is uniform from all sides; choosing a side comes together with per-side insets — roadmap ("Real-world zoning").
 - The 1 sq. m sliver threshold is an arbitrary value from the safe range (see "Sliver threshold"); it also eats real footprints below one square metre. Narrow but large footprints pass (a 16x1 m strip is **feasible**); minimum footprint width — roadmap.
 - The GFA target is a reference for comparison, not an optimizer; fitting the constraints to the target — roadmap.
@@ -378,7 +377,7 @@ The layout is Figma-like: the canvas with the plan takes the whole screen, and t
 - a concave site: the inset around a concave corner is done by GEOS, the behaviour is pinned by a test;
 - the setback destroyed the footprint: the **infeasible** verdict with the reason;
 - the setback split the footprint into parts: build on the largest one and raise the **footprint split** flag (on a tie — the leftmost, then the lowest part; see Algorithm, step 2);
-- the additional inset for coverage split the footprint itself: the same rule — the largest part plus the flag; an exact hit on the area limit is not guaranteed;
+- the additional inset for coverage split the footprint itself: the same rule — the kept part plus the flag; an exact hit on the area limit is not guaranteed;
 - the allowed area under the coverage ratio is below the sliver threshold: the additional inset destroys the footprint — the **infeasible** verdict;
 - the height limit is below one floor-to-floor height: zero floors — the **infeasible** verdict;
 - self-intersection or a degenerate polygon: an input error with an explanation (the checklist is in "Input error or the infeasible verdict");
@@ -401,5 +400,5 @@ The order follows the value-to-cost ratio and the dependencies.
 10. **Exporting the result.** To other tools where the architect continues the work, and to a report for the client — for now the result lives only in this interface.
 11. **A site polygon with holes.** No-build zones inside the site: the polygon stops being a single ring. The geometry already handles holes; validation, the wire format and the interface change.
 12. **Terrain.** Sloped sites change both the computation and the drawing; the "measured from where" question is in "Out of scope".
-13. **Geo-referencing.** Import from cadastre or GeoJSON, real map coordinates instead of the plain flat plane.
+13. **Geo-referencing.** Import from cadastre or GeoJSON: the site gets real map coordinates.
 14. **Accounts and collaboration.** The model has no user entity (see "Assumptions & trade-offs"); accounts pull in permissions on sites and trees.
