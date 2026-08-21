@@ -96,12 +96,12 @@ Column suffixes _m and _m2 are the units: metres and square metres. Polygons are
 | site_id | uuid | the site; all its options are read by this key |
 | parent_id | uuid, optional | the parent option; empty for a root |
 | name | text, optional | option name |
-| setback_m | numeric | setback |
-| floor_to_floor_m | numeric | floor-to-floor height |
-| max_height_m | numeric, optional | height limit; at least one of the two limits is set |
+| setback_m | double precision | setback |
+| floor_to_floor_m | double precision | floor-to-floor height |
+| max_height_m | double precision, optional | height limit; at least one of the two limits is set |
 | max_floors | integer, optional | floor count limit |
-| site_coverage_ratio | numeric, optional | site coverage; without it there is no additional inset (see Algorithm, step 3) |
-| gfa_target_m2 | numeric, optional | GFA target |
+| site_coverage_ratio | double precision, optional | site coverage; without it there is no additional inset (see Algorithm, step 3) |
+| gfa_target_m2 | double precision, optional | GFA target |
 | footprint | jsonb, optional | the footprint polygon after the setback and the additional inset (the kept part if it split); empty only when nothing is left of the footprint |
 | footprint_split | boolean | the **footprint split** flag |
 | created_at | timestamptz | |
@@ -110,7 +110,7 @@ site_id and parent_id are foreign keys (the API additionally checks that the par
 
 **Seeding.** On backend start, if the sites table is empty, the template sites from data/sites are inserted as ordinary rows — after that they are no different from user-created ones.
 
-Constraints are separate columns, not one jsonb field: there are five of them and the set is known; columns give types and database-level checks. The price is a migration for every new constraint; fine for the prototype, moving to jsonb when the list grows — roadmap.
+Constraints are separate columns, not one jsonb field: there are five of them and the set is known; columns give types and database-level checks. The price is a schema change for every new constraint (the prototype has no migration tool: the schema is applied on start, an existing database is recreated); fine for the prototype, moving to jsonb when the list grows — roadmap.
 
 ## Algorithm
 
@@ -166,10 +166,10 @@ The result: the footprint polygon, the metrics, the verdict with its reason and 
 
 What is rejected and what is a result:
 
-- **Input error** (HTTP 422, nothing is saved) — the question makes no sense: a broken polygon (self-intersection, fewer than three vertices, zero area); values out of bounds (negative setback, zero floor-to-floor height, coverage outside (0, 1]); neither of the two limits (height, floor count) is set. Value bounds are checked by the API layer (the pydantic validation library); the polygon geometry is checked by the core. Option creation adds one more 422 — a parent_id from another site (see "API contract").
+- **Input error** (HTTP 422, nothing is saved) — the question makes no sense: a broken polygon (self-intersection, fewer than three vertices, zero area); values out of bounds (negative setback, zero floor-to-floor height, coverage outside (0, 1]); neither of the two limits (height, floor count) is set. Value bounds are declared once, on the pydantic model of the constraints that the core and the API share; the polygon geometry is checked by the core. Option creation adds one more 422 — a parent_id from another site (see "API contract").
 - **The infeasible verdict** (a normal result, saved as an option) — the question makes sense and the answer is "nothing can be built": the setback or the additional inset destroyed the footprint, or no floor fits under the limits.
 
-There are no upper "reasonable value" bounds: a thousand floors is valid input and does not break the computation; such checks are in the roadmap. "Zero floors" is not rejected at validation either, although arithmetically it could be: it is an answer the architect must see, save in the tree and branch from, relaxing the constraints.
+There are no upper "reasonable value" bounds: a thousand floors is valid input and does not break the computation; such checks are in the roadmap (the only cap is technical: max_floors must fit the integer column). "Zero floors" is not rejected at validation either, although arithmetically it could be: it is an answer the architect must see, save in the tree and branch from, relaxing the constraints.
 
 ### Sliver threshold
 
@@ -235,7 +235,7 @@ Decisions:
 
 The computation is pure CPU and runs right in the request handler. For a single-user prototype this is fine; under load such a handler blocks the event loop for everyone — moving the computation to separate processes is in the roadmap ("Scale").
 
-The polygon in requests and responses is an array of [x, y] pairs in metres, without repeating the first vertex (as in the template sites); footprints are returned counter-clockwise. A site in responses is an object { id, name, polygon, created_at }; GET /sites is an array of such objects. An option is as in the example below; GET /sites/{id}/options is an array of such objects. Metrics and the verdict are computed on read (see "Database schema"). Machine names of the verdicts: ok, gfa_missed, infeasible. The extra fields sit flat in result next to verdict: gfa_missed adds gfa_shortfall_m2, infeasible adds reason (footprint_collapsed or zero_floors).
+The polygon in requests and responses is an array of [x, y] pairs in metres, without repeating the first vertex (as in the template sites); a site polygon is normalized on write and footprints are computed the same way, so every polygon in a response is counter-clockwise and open. A site in responses is an object { id, name, polygon, created_at }; GET /sites is an array of such objects. An option is as in the example below; GET /sites/{id}/options is an array of such objects. Metrics and the verdict are computed on read (see "Database schema"). Machine names of the verdicts: ok, gfa_missed, infeasible. Two more fields sit flat in result next to verdict: gfa_shortfall_m2 (set for gfa_missed) and reason (set for infeasible: footprint_collapsed or zero_floors); both are null otherwise.
 
 Example — creating a root option with POST /api/v1/sites/{id}/options. The site coverage ratio is not set (it is optional), so there is no additional inset and all numbers are exact. The request:
 
@@ -279,13 +279,15 @@ The response:
       "coverage": 0.646,
       "far": 3.876
     },
-    "verdict": "ok"
+    "verdict": "ok",
+    "gfa_shortfall_m2": null,
+    "reason": null
   },
   "created_at": "2026-08-18T12:00:00Z"
 }
 ```
 
-Errors: 422 — a broken polygon, values out of bounds, or a parent_id from another site, with an explanation of the reason; 404 — no such site or option. The **infeasible** verdict is not an error (see "Input error or the infeasible verdict" in Algorithm).
+Errors: 422 — a broken polygon, values out of bounds, or a parent_id that is missing or from another site; 404 — no such site or option. Every error body is { detail } with a single human-readable string, whichever layer rejected the request. The **infeasible** verdict is not an error (see "Input error or the infeasible verdict" in Algorithm).
 
 ## Visualization
 

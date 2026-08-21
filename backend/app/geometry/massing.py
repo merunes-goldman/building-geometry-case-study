@@ -32,7 +32,7 @@ class Constraints(BaseModel):
     setback_m: float = Field(ge=0)
     floor_to_floor_m: float = Field(gt=0)
     max_height_m: float | None = Field(default=None, ge=0)
-    max_floors: int | None = Field(default=None, ge=0)
+    max_floors: int | None = Field(default=None, ge=0, le=2_147_483_647)  # the range of the integer column
     site_coverage_ratio: float | None = Field(default=None, gt=0, le=1)
     gfa_target_m2: float | None = Field(default=None, gt=0)
 
@@ -69,6 +69,11 @@ def _to_shape(polygon: Polygon) -> ShapelyPolygon:
     if not shape.is_valid:  # covers self-intersection and zero-area (flat) rings alike
         raise PolygonError(explain_validity(shape))
     return shape
+
+
+def normalize_polygon(polygon: Polygon) -> Polygon:
+    """Validate a site polygon and normalize it: counter-clockwise, no repeated closing vertex."""
+    return _to_polygon(_to_shape(polygon))
 
 
 def _to_polygon(shape: ShapelyPolygon) -> Polygon:

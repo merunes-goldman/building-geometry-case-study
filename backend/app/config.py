@@ -10,3 +10,5 @@ class Config(BaseSettings):
     allowed_origins: str = "*"
     # libpq connection string (psycopg). Defaults to the docker-compose `db` service.
     database_url: str = "postgresql://postgres:postgres@localhost:5432/casestudy"
+    # Template sites seeded into an empty database; the default is the repo folder seen from backend/.
+    sites_dir: str = "../data/sites"
