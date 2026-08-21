@@ -197,8 +197,76 @@ The API layer is tested too: an end-to-end scenario — create a site, a root, a
 
 ## API contract
 
-The endpoints you exposed and their request/response shapes (create, branch, list,
-get, …).
+REST over JSON, prefix /api/v1 (room for future versions — already in the scaffold). Units in requests and responses are metres and sq. m, same as in the database.
+
+| Method and path | Purpose |
+|---|---|
+| POST /sites | create a site: name + polygon; polygon validation happens here |
+| GET /sites | the list of sites to choose from |
+| GET /sites/{id} | one site with its polygon |
+| POST /sites/{id}/options | create an option: the full set of constraints, optionally parent_id (branching) and name; the server computes the massing, saves and returns the whole option |
+| GET /sites/{id}/options | all options of a site as a flat list |
+| GET /options/{id} | one option |
+| POST /massing/preview | the same computation without saving: site_id + constraints; nothing is written |
+
+Decisions:
+
+- **Branching is POST options with parent_id.** There is no separate "branch" action in the API: creating a root and branching differ only by the parent link.
+- **The client sends the full set of constraints, not a diff from the parent.** The form is pre-filled with the parent's values; the user edits and sends everything back. No merging of sets on the server — fewer rules, and an option is already self-contained on arrival. A parent_id from another site is an error.
+- **The tree is returned as a flat list with parent_id.** No nested structure is built on either side: for drawing, the client computes indents and row order (children under the parent) in one pass; nested JSON would be a second representation of the same thing.
+- **Preview without saving.** The core is a pure function, so the handler is trivial; it gives a live recomputation while the user tunes the constraints, before anything is saved.
+
+The polygon in requests and responses is an array of [x, y] pairs in metres, without repeating the first vertex (as in the template sites). A site in responses is an object { id, name, polygon, created_at }; GET /sites is an array of such objects. An option is as in the example below; GET /sites/{id}/options is an array of such objects. Metrics and the verdict are computed on read (see "Database schema"). Machine names of the verdicts: ok, gfa_missed (with gfa_shortfall_m2), infeasible (with reason: footprint_collapsed or zero_floors).
+
+Example — creating a root option with POST /api/v1/sites/{id}/options. The site coverage ratio is not set (it is optional), so there is no additional inset and all numbers are exact. The request:
+
+```json
+{
+  "name": "baseline",
+  "parent_id": null,
+  "constraints": {
+    "setback_m": 3,
+    "floor_to_floor_m": 3.5,
+    "max_height_m": 24,
+    "max_floors": 6
+  }
+}
+```
+
+The response:
+
+```json
+{
+  "id": "9b2f...",
+  "site_id": "51c0...",
+  "parent_id": null,
+  "name": "baseline",
+  "constraints": {
+    "setback_m": 3,
+    "floor_to_floor_m": 3.5,
+    "max_height_m": 24,
+    "max_floors": 6,
+    "site_coverage_ratio": null,
+    "gfa_target_m2": null
+  },
+  "result": {
+    "footprint": [[3, 3], [37, 3], [37, 22], [3, 22]],
+    "footprint_split": false,
+    "metrics": {
+      "footprint_area_m2": 646.0,
+      "floor_count": 6,
+      "height_m": 21.0,
+      "gfa_m2": 3876.0,
+      "coverage": 0.646,
+      "far": 3.876
+    },
+    "verdict": "ok"
+  },
+  "created_at": "2026-08-18T12:00:00Z"
+}
+```
+
+Errors: 422 — a broken polygon, values out of bounds, or a parent_id from another site, with an explanation of the reason; 404 — no such site or option. The **infeasible** verdict is not an error (see "Input error or the infeasible verdict" in Algorithm).
 
 ## Visualization
 
