@@ -38,7 +38,7 @@ Out of scope — all in the roadmap:
 - 3D view
 - branch archiving and option renaming (see "Tree rules")
 - algorithm versioning (a stored option remembers which version of the computation produced it)
-- scale: metric columns for SQL search and sorting, paged tree loading
+- scale: metric columns for SQL search and sorting, paged tree loading, the CPU-bound computation moved to worker processes
 - user accounts and collaboration
 - exporting the result to other tools
 - site polygon with holes: zones inside the site where building is not allowed
@@ -216,6 +216,8 @@ Decisions:
 - **The tree is returned as a flat list with parent_id.** No nested structure is built on either side: for drawing, the client computes indents and row order (children under the parent) in one pass; nested JSON would be a second representation of the same thing.
 - **Preview without saving.** The core is a pure function, so the handler is trivial; it gives a live recomputation while the user tunes the constraints, before anything is saved.
 
+The computation is pure CPU and runs right in the request handler. For a single-user prototype this is fine; under load such a handler blocks the event loop for everyone — moving the computation to separate processes is in the roadmap ("Scale").
+
 The polygon in requests and responses is an array of [x, y] pairs in metres, without repeating the first vertex (as in the template sites). A site in responses is an object { id, name, polygon, created_at }; GET /sites is an array of such objects. An option is as in the example below; GET /sites/{id}/options is an array of such objects. Metrics and the verdict are computed on read (see "Database schema"). Machine names of the verdicts: ok, gfa_missed (with gfa_shortfall_m2), infeasible (with reason: footprint_collapsed or zero_floors).
 
 Example — creating a root option with POST /api/v1/sites/{id}/options. The site coverage ratio is not set (it is optional), so there is no additional inset and all numbers are exact. The request:
@@ -270,7 +272,45 @@ Errors: 422 — a broken polygon, values out of bounds, or a parent_id from anot
 
 ## Visualization
 
-What you render and why you chose that approach.
+### Choosing the rendering approach
+
+The scene is tiny: two polygons with a dozen vertices each. With the backend it was the other way around: there a library covered a hard algorithm (the inset); here there is no hard algorithm — a browser can draw two polygons by itself, the only question is using what. Considered approaches:
+
+| Approach | Pros | Cons |
+|---|---|---|
+| **SVG** | React itself redraws the picture when the data changes; clicks and hover work like on ordinary page elements; sharp at any scale | slow with thousands of shapes — not the case here |
+| Canvas 2D | fast with many shapes | redrawing and "what was clicked" detection must be written by hand; no gain on a scene this small |
+| 2D scene libraries: Konva, Fabric, Pixi | ready-made shapes, events, dragging | engines on top of Canvas/WebGL with their own scene management next to React; they solve the problems of big and editable scenes — there are none here |
+| d3 | utilities for scales, axes, zoom | manages the page itself — coexists poorly with React; built for charts, not plans |
+| three.js (WebGL, 3D) | true volume: floors visible as a stack | camera, lighting, mouse picking — a separate layer of work; adds no new data — the building is the footprint stretched upwards, so the plan plus the floor count carries everything |
+
+The choice: **SVG rendered by React**, no libraries. They will become appropriate later, and that is in the roadmap: drawing the site with the mouse is exactly a task for Konva or Fabric, the 3D view — for three.js.
+
+The panels around the scene are ordinary UI, and there a component library is appropriate: **MUI** (form fields, lists, buttons, dialogs, banners). The choice is mostly taste: the needed set of components is small and any mainstream kit covers it (Ant Design, Chakra, Mantine — or the stock browser controls, which take longer to make look decent). The deciding argument is familiarity: MUI is the most downloaded of them on npm, I have used it before and I like how it looks; the time is better spent on the core of the task than on learning a new library.
+
+### The screen
+
+The layout is Figma-like: the canvas with the plan takes the whole screen, and the panels float on top of it. Panel hiding and collapsing — roadmap.
+
+- **The plan (full screen).** Top-down view: the site polygon and the buildable footprint. Redrawn on every recomputation; fitted into the area free of panels.
+- **The top panel.** Site selection and the "Create site" button — a dialog with a name and coordinates pasted as text (an array of [x, y] pairs). The template sites are pre-seeded (see "Database schema"); drawing the site with the mouse — roadmap.
+- **The inspector (right).** The top half is the option list: all options of the site in a single list, nesting shown by indents, roots as top-level rows; a row carries the name, GFA, floor count and a verdict icon, so a rough comparison is readable straight from the list. The bottom half is the selected option: the constraint fields, the metrics and the verdict, and the controls — the "Add option" and "Start fresh" buttons and the "Show parent" toggle. Next to "Add option" a note explains what the new option will become: a child of the selected one or a new root. "Show parent" shows the parent's metrics as a second column with the differences highlighted, and its polygon dashed on the plan (details in Behaviour).
+
+### Behaviour
+
+1. The user picks a site and enters constraints; the preview recomputes on every change (POST /massing/preview, with a short delay after typing). Switching the site clears the selection, resets the form and recomputes the plan right away — the old site's footprint does not stay on the plan.
+2. "Add option" saves the computation — as a child of the option selected in the list or, when nothing is selected, as a new root (the start of a new tree). The selection moves to the new option: the next edit branches from it.
+3. Clicking an option shows its snapshot from the database (the footprint, the metrics) and fills the form with its constraints; the preview turns on with the first manual edit — programmatic filling does not trigger a recomputation. "Start fresh" clears the selection, resets the form and recomputes the plan right away: there is no snapshot left to protect.
+4. Comparison with the parent: a selected non-root option has the "Show parent" toggle — the parent's polygon is drawn dashed over the plan, its metrics appear as a second column in the inspector, and the changed constraints and differing metrics are highlighted. Comparing any two options — roadmap.
+5. The verdict on screen: **feasible** — the normal view; **GFA target missed** — a yellow banner with the shortfall; **infeasible** — a red banner with the reason. The footprint leaves the plan only when it is destroyed; with zero floors the footprint exists, is stored and is shown.
+6. Buttons that create data ("Add option", site creation) are disabled for the duration of the request; the loading is shown by a single shared indicator: chaotic clicks create no duplicates and break nothing. The preview does not lock the fields — that would kill the live recomputation; instead the plan gets a "recomputing" indicator, the requests are numbered, and a response with a stale number is dropped; no request cancellation is needed.
+7. Request errors: on a preview 422 the plan keeps the last valid footprint and the reason text is shown by the form; a failed save shows a banner with the text, and the buttons unlock.
+
+### Drawing details
+
+- Coordinates are in metres with the Y axis pointing up; in SVG the Y axis grows downwards, so the drawing flips it.
+- No pan and zoom: the site is fitted into the window automatically (the viewBox follows the polygon's bounding box). Zoom — roadmap.
+- Comparing any two options (overlaid footprints, a table of differences) — roadmap; in the prototype — the metrics in the list rows and the parent overlay.
 
 ## Assumptions & trade-offs
 
