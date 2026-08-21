@@ -23,14 +23,16 @@
         "type": "node-terminal",
         "request": "launch",
         "command": "docker compose up --build",
-        "cwd": "${workspaceFolder}"
+        "cwd": "${workspaceFolder}",
+        "postDebugTask": "compose: stop"
       },
       {
         "name": "db (docker)",
         "type": "node-terminal",
         "request": "launch",
         "command": "docker compose up db",
-        "cwd": "${workspaceFolder}"
+        "cwd": "${workspaceFolder}",
+        "postDebugTask": "compose: stop db"
       },
       {
         "name": "backend (local)",
@@ -45,6 +47,37 @@
         "request": "launch",
         "command": "npm install && npm run dev",
         "cwd": "${workspaceFolder}/frontend"
+      }
+    ]
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "compose: stop",
+        "type": "shell",
+        "command": "docker compose stop",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "reveal": "silent",
+          "close": true
+        },
+        "problemMatcher": []
+      },
+      {
+        "label": "compose: stop db",
+        "type": "shell",
+        "command": "docker compose stop db",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "reveal": "silent",
+          "close": true
+        },
+        "problemMatcher": []
       }
     ]
   }

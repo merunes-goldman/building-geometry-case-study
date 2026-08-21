@@ -1,7 +1,7 @@
 # Frontend — building geometry case study
 
-Minimal Vite + React (plain JS). It boots, calls the backend health check, and
-gives you an empty canvas to build the visualization in.
+Vite + React (plain JS) with MUI for the panels and plain SVG for the plan; the design is in
+`docs/DESIGN.md`, "Visualization".
 
 ## Getting started
 
@@ -13,15 +13,19 @@ npm run dev        # http://localhost:5173
 The backend base URL defaults to `http://localhost:8000`; override with
 `VITE_API_BASE` (see `.env.example`). With the root `docker compose up`, both run together.
 
-## What's here / what's yours
+## What's here
 
-- `src/api.js` — tiny fetch client (only `getHealth` so far).
-- `src/App.jsx` — shows backend health + a placeholder canvas marked `TODO`.
+- `src/App.jsx` — state and behaviour: site and option selection, the live preview (debounced, numbered requests,
+  stale responses dropped), saving and branching options.
+- `src/components/TopPanel.jsx` — the "Create site" dialog (coordinates pasted as text), site selector, option list,
+  backend health mark (`GET /health`, polled).
+- `src/components/OptionSelect.jsx` — the option list as a dropdown: "New option" first, then the tree indented by depth.
+- `src/components/Inspector.jsx` — the constraint form, metrics, verdict, parent comparison, "Add option".
+- `src/components/Plan.jsx` — the top-down plan in SVG: site polygon, footprint, the parent's footprint dashed.
+- `src/lib/api.js` — fetch client for the API (`docs/DESIGN.md`, "API contract").
+- `src/lib/ui.js` — shared bits: verdict colours and labels, number formatting, the error helper style.
 
-You own the visualization: render the site, buildable footprint, massing, and
-metrics, and let the user create / branch / navigate saved options (the decision
-tree). Rendering approach is your call (2D SVG/canvas, 3D, …) — justify it in
-`docs/DESIGN.md`. Add whatever libraries you need.
+Lint: `npm run lint` (biome; `npx biome check --write src` to format).
 
 ## Commands
 

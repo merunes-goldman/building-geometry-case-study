@@ -98,6 +98,12 @@ async def test_input_errors_are_422(client: AsyncClient):
     )
     assert no_limit.status_code == 422
 
+    long_name = await client.post("/sites", json={"name": "x" * 31, "polygon": _RECTANGLE})
+    assert long_name.status_code == 422
+
+    blank_name = await client.post(f"/sites/{site_id}/options", json={"name": "   ", "constraints": _MODEST})
+    assert blank_name.status_code == 422  # whitespace is stripped, an empty name is rejected
+
     parent = (await client.post(f"/sites/{other_site_id}/options", json={"constraints": _MODEST})).json()
     foreign = await client.post(f"/sites/{site_id}/options", json={"parent_id": parent["id"], "constraints": _MODEST})
     assert foreign.status_code == 422 and "another site" in foreign.json()["detail"]
