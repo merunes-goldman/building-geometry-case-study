@@ -12,6 +12,7 @@ dependencies = [
     "loguru>=0.7",
     "psycopg[binary]>=3.2",
     "psycopg-pool>=3.2",
+    "shapely>=2.1.2",
 ]
 
 [build-system]
@@ -33,6 +34,7 @@ dev = [
     "ruff>=0.8",
     "pyright>=1.1.380",
     "pre-commit>=3.5",
+    "types-shapely>=2.1.0.20260728",
 ]
 
 [tool.ruff]
