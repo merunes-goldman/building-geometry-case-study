@@ -41,9 +41,10 @@ async def test_create_a_site_a_root_a_branch_and_read_the_tree(client: AsyncClie
     site_id = created.json()["id"]
     assert (await client.get(f"/sites/{site_id}")).json()["polygon"] == _RECTANGLE
 
-    response = await client.post(f"/sites/{site_id}/options", json={"name": "baseline", "constraints": _MODEST})
+    response = await client.post(f"/sites/{site_id}/options", json={"name": " baseline ", "constraints": _MODEST})
     assert response.status_code == 201
     root = response.json()
+    assert root["name"] == "baseline"  # stored stripped
     assert root["parent_id"] is None and root["result"]["verdict"] == "ok"
     assert root["result"]["metrics"]["floor_count"] == 6
     assert 600 - 0.2 <= root["result"]["metrics"]["footprint_area_m2"] <= 600
@@ -97,6 +98,12 @@ async def test_input_errors_are_422(client: AsyncClient):
         f"/sites/{site_id}/options", json={"constraints": {"setback_m": 1, "floor_to_floor_m": 3}}
     )
     assert no_limit.status_code == 422
+
+    long_name = await client.post("/sites", json={"name": "x" * 31, "polygon": _RECTANGLE})
+    assert long_name.status_code == 422
+
+    blank_name = await client.post(f"/sites/{site_id}/options", json={"name": "   ", "constraints": _MODEST})
+    assert blank_name.status_code == 422  # whitespace is stripped, an empty name is rejected
 
     parent = (await client.post(f"/sites/{other_site_id}/options", json={"constraints": _MODEST})).json()
     foreign = await client.post(f"/sites/{site_id}/options", json={"parent_id": parent["id"], "constraints": _MODEST})

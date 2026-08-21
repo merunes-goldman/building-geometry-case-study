@@ -84,7 +84,7 @@ Column suffixes _m and _m2 are the units: metres and square metres. Polygons are
 | column | type | purpose |
 |---|---|---|
 | id | uuid | |
-| name | text | |
+| name | text | 1 to 30 characters |
 | polygon | jsonb | polygon vertices, metres |
 | created_at | timestamptz | |
 
@@ -95,7 +95,7 @@ Column suffixes _m and _m2 are the units: metres and square metres. Polygons are
 | id | uuid | |
 | site_id | uuid | the site; all its options are read by this key |
 | parent_id | uuid, optional | the parent option; empty for a root |
-| name | text, optional | option name |
+| name | text, optional | option name, 1 to 30 characters |
 | setback_m | double precision | setback |
 | floor_to_floor_m | double precision | floor-to-floor height |
 | max_height_m | double precision, optional | height limit; at least one of the two limits is set |
@@ -210,7 +210,7 @@ Template sites, answers computed by hand:
 - the floor-count rules on their own: the 9.6 / 3.2 tolerance, one limit acting alone, at least one limit required;
 - the read-time derivation of a saved result matches the fresh computation (see "Derived values").
 
-The API layer is tested too: an end-to-end scenario — create a site, a root, a branch from it, read the tree; seeding of the template sites into an empty database; a check that the preview adds no rows to the database; error codes — 422 (polygon, value bounds, parent_id from another site) and 404.
+The API layer is tested too: an end-to-end scenario — create a site, a root, a branch from it, read the tree; seeding of the template sites into an empty database; a check that the preview adds no rows to the database; error codes — 422 (polygon, value bounds, name length, parent_id from another site) and 404.
 
 ## API contract
 
@@ -225,6 +225,7 @@ REST over JSON, prefix /api/v1 (room for future versions — already in the scaf
 | GET /sites/{id}/options | all options of a site as a flat list |
 | GET /options/{id} | one option |
 | POST /massing/preview | the same computation without saving: site_id + constraints; nothing is written |
+| GET /health | liveness check from the scaffold; the health mark in the top panel polls it |
 
 Decisions:
 
@@ -287,7 +288,7 @@ The response:
 }
 ```
 
-Errors: 422 — a broken polygon, values out of bounds, or a parent_id that is missing or from another site; 404 — no such site or option. Every error body is { detail } with a single human-readable string, whichever layer rejected the request. The **infeasible** verdict is not an error (see "Input error or the infeasible verdict" in Algorithm).
+Errors: 422 — a broken polygon, values out of bounds, a name outside 1 to 30 characters, or a parent_id that is missing or from another site; 404 — no such site or option. Every error body is { detail } with a single human-readable string, whichever layer rejected the request. The **infeasible** verdict is not an error (see "Input error or the infeasible verdict" in Algorithm).
 
 ## Visualization
 
@@ -313,33 +314,30 @@ The layout is Figma-like: the canvas with the plan takes the whole screen, and t
 
 ```
 +----------------------------------------------------------+
-| +-------------------------------------------+            |
-| | top panel: site selector, "Create site"   |            |
-| +-------------------------------------------+            |
+| +----------------------------------------------------+   |
+| | top panel: "Create site", site, option, backend    |   |
+| +----------------------------------------------------+   |
 |                                     +------------------+ |
-|                                     | option list      | |
-|   plan (full screen):               | indents = tree   | |
-|   site polygon + footprint          +------------------+ |
 |                                     | selected option: | |
-|                                     | form, metrics,   | |
-|                                     | verdict, buttons | |
+|   plan (full screen):               | form, metrics,   | |
+|   site polygon + footprint          | verdict, button  | |
 |                                     +------------------+ |
 +----------------------------------------------------------+
 ```
 
 - **The plan (full screen).** Top-down view: the site polygon and the buildable footprint. Redrawn on every recomputation; fitted into the area free of panels.
-- **The top panel.** Site selection and the "Create site" button — a dialog with a name and coordinates pasted as text (an array of [x, y] pairs). The template sites are pre-seeded (see "Database schema"); drawing the site with the mouse — roadmap.
-- **The inspector (right).** The top half is the option list: all options of the site in a single list, nesting shown by indents, roots as top-level rows; a row carries the name, GFA, floor count and a verdict icon, so a rough comparison is readable straight from the list. The bottom half is the selected option: the constraint fields, the metrics and the verdict, and the controls — the "Add option" and "Start fresh" buttons and the "Show parent" toggle. Next to "Add option" a note explains what the new option will become: a child of the selected one or a new root. "Show parent" shows the parent's metrics as a second column with the differences highlighted, and its polygon dashed on the plan (details in Behaviour).
+- **The top panel.** The "Create site" button — a dialog with a name and coordinates pasted as text (an array of [x, y] pairs) — then site selection and the option list. The option list is a dropdown: "New option" first, then all options of the site in a single list, nesting shown by indents, roots as top-level rows; a row carries the name, GFA, floor count and a verdict mark, so a rough comparison is readable straight from the list. At the end, a backend health mark (GET /health, polled), so an unreachable backend is visible before the first failed request. The template sites are pre-seeded (see "Database schema"); drawing the site with the mouse — roadmap.
+- **The inspector (right).** The selected option: the constraint fields, the metrics and the verdict, and the controls — the "Add option" button and the "Compare to parent" toggle. Next to "Add option" a note explains what the new option will become: a child of the selected one or a new root. "Compare to parent" shows the parent's metrics before the current ones as "parent value -> this value", the differing rows tinted, the parent's value with the same arrow at the start of each changed field, and its polygon dashed on the plan (details in Behaviour).
 
 ### Behaviour
 
 1. The user picks a site and enters constraints; the preview recomputes on every change (POST /massing/preview, with a short delay after typing). Switching the site clears the selection, resets the form and recomputes the plan right away — the old site's footprint does not stay on the plan. A reset returns the form to valid defaults, so the immediate recomputation always has a computable set of constraints.
 2. "Add option" saves the computation — as a child of the option selected in the list or, when nothing is selected, as a new root (the start of a new tree). The selection moves to the new option: the next edit branches from it.
-3. Clicking an option shows its snapshot from the database (the footprint, the metrics) and fills the form with its constraints; the preview turns on with the first manual edit — programmatic filling does not trigger a recomputation. "Start fresh" repeats the reset of a site switch: there is no snapshot left to protect.
-4. Comparison with the parent: a selected non-root option has the "Show parent" toggle — the parent's polygon is drawn dashed over the plan, its metrics appear as a second column in the inspector, and the changed constraints and differing metrics are highlighted. Comparing any two options — roadmap.
+3. Clicking an option shows its snapshot from the database (the footprint, the metrics) and fills the form with its constraints; the preview turns on with the first manual edit — programmatic filling does not trigger a recomputation. "New option" in the list repeats the reset of a site switch: there is no snapshot left to protect.
+4. Comparison with the parent: a selected non-root option has the "Compare to parent" toggle — the parent's polygon is drawn dashed over the plan, its metrics appear in a column next to the current ones in the inspector, and the changed constraints and differing metrics are highlighted. Comparing any two options — roadmap.
 5. The verdict on screen: **feasible** — the normal view; **GFA target missed** — a yellow banner with the shortfall; **infeasible** — a red banner with the reason. The footprint leaves the plan only when it is destroyed; with zero floors the footprint exists, is stored and is shown. With the **footprint split** flag a note next to the verdict says the building stands on the kept part — the rest of the footprint was dropped.
 6. Buttons that create data ("Add option", site creation) are disabled for the duration of the request; the loading is shown by a single shared indicator: frantic clicking creates no duplicates and breaks nothing. The preview does not lock the fields — that would kill the live recomputation; instead the plan gets a "recomputing" indicator, the requests are numbered, and a response with a stale number is dropped; no request cancellation is needed.
-7. Request errors: on a preview 422 the plan keeps the last valid footprint and the reason text is shown by the form; a failed save shows a banner with the text, and the buttons unlock.
+7. Request errors: on a preview 422 the plan keeps the last valid footprint and the reason is shown under the offending field; a failed save shows a banner with the text, and the buttons unlock.
 
 ### Drawing details
 
