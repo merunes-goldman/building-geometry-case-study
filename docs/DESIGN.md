@@ -347,9 +347,31 @@ The layout is Figma-like: the canvas with the plan takes the whole screen, and t
 
 ## Edge cases
 
-How you handle concave plots, an inset that collapses to zero/splits, infeasible
-constraint sets, self-intersection, an unreachable GFA target.
+- a concave site: the inset around a concave corner is done by GEOS, the behaviour is pinned by a test;
+- the setback destroyed the footprint: the **infeasible** verdict with the reason;
+- the setback split the footprint into parts: build on the largest one and raise the **footprint split** flag (on a tie — the leftmost, then the lowest part; see Algorithm, step 2);
+- the additional inset for coverage split the footprint itself: the same rule — the largest part plus the flag; an exact hit on the area limit is not guaranteed;
+- the allowed area under the coverage ratio is below the sliver threshold: the additional inset destroys the footprint — the **infeasible** verdict;
+- the height limit is below one floor-to-floor height: zero floors — the **infeasible** verdict;
+- self-intersection or a degenerate polygon: an input error with an explanation (the checklist is in "Input error or the infeasible verdict");
+- the GFA target is unreachable under the given limits: the verdict with the shortfall in sq. m;
+- slivers from rounding errors: the 1 sq. m sliver threshold (see the assumption above).
 
 ## What I'd do next
 
-With another week: what you'd build, in what order, and why.
+The order follows the value-to-cost ratio and the dependencies.
+
+1. **Comparing any two options.** Picking two in the list, overlaid footprints on the plan, a table of constraint and metric differences — a generalization of the prototype's parent comparison. The data is already in the database, the work is entirely on the frontend. The small interface debts go here too: zoom and pan, panel hiding.
+2. **Drawing the site with the mouse.** Direct editing of vertices on the plan; in the prototype the polygon is entered only as text.
+3. **Real-world zoning.** The new constraint kinds and realistic value ranges from "Out of scope", with the numbers from domain experts and regulations. Constraints stop being five numbers: they move to jsonb and a schema version appears; the inset with its own distance per side is the biggest jump in core complexity.
+4. **Algorithm versioning and branch archiving.** Needs of live use: the algorithm changes — an option keeps the version of the computation that produced it; trees grow — dead-end branches get hidden without being erased. Option renaming goes here too: in the prototype the name is frozen together with the other fields.
+5. **The 3D view.** Floors stacked in three.js: the footprint stretched upwards by the floor count. The data is already there (the footprint, the floor count, the floor-to-floor height); the value is clarity, the volume adds no new data.
+6. **GFA target auto-fit.** The target is optional and reachable by different combinations of constraints, so this is a search over the allowed ranges with suggestions on how to cover the shortfall: one floor higher or a wider footprint. That is the difference from the additional inset (Algorithm, step 3) — there a mandatory rule has a single answer. It needs a stable core, hence late.
+7. **Multiple buildings.** Building on all parts of a split footprint, keeping the distances between buildings. A building with a shape of its own, not equal to the footprint (e.g. a rectangle fitted inside it), goes here too. This changes the model: an option stops being a single polygon.
+8. **Underground floors.** Basements live by their own rules (listed in "Out of scope") — up to an underground footprint wider than the building above: parking under the whole site. A separate extension of the floor model.
+9. **Scale.** Dedicated metric columns for SQL search and sorting, paged tree loading — as the number of users and the size of trees grow. The computation is pure CPU: moving it to separate processes (a worker pool or a task queue via a message broker) keeps it from blocking the event loop of the API server (see "API contract").
+10. **Exporting the result.** To other tools where the architect continues the work, and to a report for the client — for now the result lives only in this interface.
+11. **A site polygon with holes.** Zones inside the site where building is not allowed: the polygon stops being a single ring. The geometry already handles holes; validation, the wire format and the interface change.
+12. **Terrain.** The prototype treats the site as flat; on a slope even the building height needs a definition — from which level to measure. Changes both the computation and the drawing.
+13. **Geo-referencing.** Real map coordinates, import from cadastre or GeoJSON; for now — metres on a flat plane, not attached to any map.
+14. **Accounts and collaboration.** There is no user as an entity yet: no authorization, no data separation — everyone sees the same thing. Accounts pull in permissions on sites and trees.
