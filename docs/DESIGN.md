@@ -146,7 +146,7 @@ The choice: **Shapely** — one dependency covers the inset, the validation and 
    - The floor count is the smaller of two numbers: the floor limit and the floors by height. If only one of the two limits is set, it acts alone; at least one is required.
    - Zero floors — the verdict is **infeasible**.
 5. **Metrics.** Footprint area, floor count, building height, GFA — and, for reference, coverage and FAR. The formulas are listed in "Derived values" below; one thing to state here: a floor occupies the whole footprint, so the floor area is the footprint area.
-6. **Verdict.** One of three: **feasible** — there is a building, and the GFA target (if set) is reached; **GFA target missed** — there is a building, but the GFA target is not reached, with the exact shortfall in sq. m; **infeasible** — with the reason: the footprint is gone, or no floor fits.
+6. **Verdict.** One of three: **feasible** — there is a building, and the GFA target (if set) is reached; **GFA target missed** — there is a building, but the GFA target is not reached, with the exact shortfall in sq. m; **infeasible** — with the reason: the footprint is gone, or no floor fits (when both hold, the footprint reason is reported).
 
 Step 2 in one picture — the notched template site with the footprint after the setback drawn inside it:
 
@@ -198,13 +198,19 @@ Template sites, answers computed by hand:
 - the 40x25 m rectangle with the "modest" set: a 3 m setback gives a 34x19 = 646 sq. m footprint; the additional inset for the 60% coverage brings the area to just under 600 sq. m — the check is "not above 600 and within tolerance of it", not exact equality (the millimetre search step does not land on 600.00 exactly); 6 floors; GFA = footprint area * 6;
 - the L-shaped site: the inset around a concave corner; the footprint area is checked against a hand computation;
 - the notched site: a moderate setback eats the neck — the footprint splits into two parts (the flag is raised); a big setback destroys the footprint — the verdict is **infeasible**;
-- the choice of the largest part is tested on an asymmetric polygon: on the notched site the split parts are always equal, so that test cannot show which part the code took; the equal-parts rule — take the leftmost — is a separate test;
+- the choice of the largest part is tested on an asymmetric polygon: on the notched site the split parts are always equal, so that test cannot show which part the code took; the equal-parts rule — take the leftmost — is checked on the notched site itself;
 - the set with a 12 m setback shows that feasibility depends on the site: on the notched site the footprint is destroyed — **infeasible**, while on the 40x25 rectangle a 16x1 = 16 sq. m strip remains and 2 floors fit — **feasible**;
 - the "no floor fits" reason is tested with a separate set where the height limit is below one floor-to-floor height;
 - broken polygons — a figure-eight self-intersection, two vertices, zero area — give an input error with an explanation;
-- a GFA target above the reachable maximum gives the **GFA target missed** verdict with the exact shortfall in sq. m.
+- a GFA target above the reachable maximum gives the **GFA target missed** verdict with the exact shortfall in sq. m;
+- coverage and a GFA target together: the "tower" set on the L-shaped site — **GFA target missed** with the exact shortfall;
+- the additional inset for coverage can split the footprint too: a thin neck survives the setback but not the coverage inset — the flag is raised and the area jumps well below the limit;
+- a coverage limit below the sliver threshold destroys the footprint — **infeasible**;
+- slivers are removed before the split analysis: a 0.25 sq. m piece left by the inset raises no false **footprint split** flag;
+- the floor-count rules on their own: the 9.6 / 3.2 tolerance, one limit acting alone, at least one limit required;
+- the read-time derivation of a saved result matches the fresh computation (see "Derived values").
 
-The API layer is tested too: an end-to-end scenario — create a site, a root, a branch from it, read the tree; seeding of the template sites into an empty database; a check that the preview adds no rows to the database; a check that the read-time derivation matches a fresh computation (see "Derived values"); error codes — 422 (polygon, value bounds, parent_id from another site) and 404.
+The API layer is tested too: an end-to-end scenario — create a site, a root, a branch from it, read the tree; seeding of the template sites into an empty database; a check that the preview adds no rows to the database; error codes — 422 (polygon, value bounds, parent_id from another site) and 404.
 
 ## API contract
 
@@ -229,7 +235,7 @@ Decisions:
 
 The computation is pure CPU and runs right in the request handler. For a single-user prototype this is fine; under load such a handler blocks the event loop for everyone — moving the computation to separate processes is in the roadmap ("Scale").
 
-The polygon in requests and responses is an array of [x, y] pairs in metres, without repeating the first vertex (as in the template sites). A site in responses is an object { id, name, polygon, created_at }; GET /sites is an array of such objects. An option is as in the example below; GET /sites/{id}/options is an array of such objects. Metrics and the verdict are computed on read (see "Database schema"). Machine names of the verdicts: ok, gfa_missed, infeasible. The extra fields sit flat in result next to verdict: gfa_missed adds gfa_shortfall_m2, infeasible adds reason (footprint_collapsed or zero_floors).
+The polygon in requests and responses is an array of [x, y] pairs in metres, without repeating the first vertex (as in the template sites); footprints are returned counter-clockwise. A site in responses is an object { id, name, polygon, created_at }; GET /sites is an array of such objects. An option is as in the example below; GET /sites/{id}/options is an array of such objects. Metrics and the verdict are computed on read (see "Database schema"). Machine names of the verdicts: ok, gfa_missed, infeasible. The extra fields sit flat in result next to verdict: gfa_missed adds gfa_shortfall_m2, infeasible adds reason (footprint_collapsed or zero_floors).
 
 Example — creating a root option with POST /api/v1/sites/{id}/options. The site coverage ratio is not set (it is optional), so there is no additional inset and all numbers are exact. The request:
 
