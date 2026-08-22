@@ -15,30 +15,47 @@ import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { errorHelperSx, fmt, VERDICT_COLOR } from "../lib/ui.js";
-
-export const INSPECTOR_WIDTH = 440;
+import { errorHelperSx, formatNumber, VERDICT } from "../lib/ui.js";
 
 // --- helpers ------------------------------------------------------------------------------------
 
+// The constraint fields; `input` holds the hints for the number input (the real bounds live in the API).
 const FIELDS = [
-  ["setback_m", "Setback, m", { min: 0, step: "any" }],
-  ["floor_to_floor_m", "Floor-to-floor, m", { min: 0, step: "any" }],
-  ["max_height_m", "Max height, m", { min: 0, step: "any" }],
-  ["max_floors", "Max floors", { min: 0, step: 1 }],
-  ["site_coverage_ratio", "Site coverage, 0-1", { min: 0, max: 1, step: 0.01 }],
-  ["gfa_target_m2", "GFA target, m2", { min: 0, step: "any" }],
+  { key: "setback_m", label: "Setback, m", input: { min: 0, step: "any" } },
+  {
+    key: "floor_to_floor_m",
+    label: "Floor-to-floor, m",
+    input: { min: 0.1, step: "any" },
+  },
+  {
+    key: "max_height_m",
+    label: "Max height, m",
+    input: { min: 0, step: "any" },
+  },
+  { key: "max_floors", label: "Max floors", input: { min: 0, step: 1 } },
+  {
+    key: "site_coverage_ratio",
+    label: "Site coverage, 0-1",
+    input: { min: 0.01, max: 1, step: 0.01 },
+  },
+  {
+    key: "gfa_target_m2",
+    label: "GFA target, m2",
+    input: { min: 1, step: "any" },
+  },
 ];
-const FIELD_LABELS = new Map(FIELDS.map(([key, label]) => [key, label]));
 
 const METRICS = [
-  ["footprint_area_m2", "Footprint area, m2", 1],
-  ["floor_count", "Floors", 0],
-  ["height_m", "Height, m", 1],
-  ["gfa_m2", "GFA, m2", 1],
-  ["coverage", "Coverage", 2],
-  ["far", "FAR", 2],
+  { key: "footprint_area_m2", label: "Footprint area, m2", digits: 1 },
+  { key: "floor_count", label: "Floors", digits: 0 },
+  { key: "height_m", label: "Height, m", digits: 1 },
+  { key: "gfa_m2", label: "GFA, m2", digits: 1 },
+  { key: "coverage", label: "Coverage", digits: 2 },
+  { key: "far", label: "FAR", digits: 2 },
 ];
+// Fixed column widths, so toggling the comparison moves nothing.
+const PARENT_COLUMN_WIDTH = 104;
+const VALUE_COLUMN_WIDTH = 88;
 
 const REASON_TEXT = {
   footprint_collapsed:
@@ -46,75 +63,73 @@ const REASON_TEXT = {
   zero_floors: "no floor fits under the limits",
 };
 
-// A 422 detail looks like "body.constraints.setback_m: Input should be ...; body.constraints: Value error, ...".
-// Field messages go under their field, the rest is shown as one line.
-function splitError(text) {
+// A rejected request carries FastAPI's list of { loc, msg } for request validation, or one string from the API's own checks.
+// A message for a known field goes under that field, the rest is shown as one line.
+function splitError(error) {
   const fields = {};
   const general = [];
-  for (const part of (text ?? "").split("; ").filter(Boolean)) {
-    const [loc, ...rest] = part.split(": ");
-    const key = loc.split(".").pop();
-    if (rest.length && FIELD_LABELS.has(key)) fields[key] = rest.join(": ");
-    else
-      general.push(
-        rest.length ? rest.join(": ").replace(/^Value error, /, "") : part,
-      );
+  const items = Array.isArray(error?.detail)
+    ? error.detail
+    : error
+      ? [{ loc: [], msg: error.message }]
+      : [];
+  for (const { loc, msg } of items) {
+    const key = loc.at(-1);
+    if (FIELDS.some((field) => field.key === key)) {
+      fields[key] = msg;
+    } else {
+      general.push(msg.replace(/^Value error, /, ""));
+    }
   }
   return { fields, general: general.join("; ") };
 }
 
-function VerdictAlert({ result }) {
-  const { verdict, gfa_shortfall_m2, reason, footprint_split, footprint } =
-    result;
-  const text = {
-    ok: "Feasible",
-    gfa_missed: `GFA target missed by ${fmt(gfa_shortfall_m2, 1)} m2`,
-    infeasible: `Infeasible: ${REASON_TEXT[reason]}`,
-  }[verdict];
-  return (
-    <Stack spacing={1}>
-      <Alert severity={VERDICT_COLOR[verdict]}>{text}</Alert>
-      {footprint_split && footprint && (
-        <Alert severity="info">
-          The footprint split: the building stands on the kept part, the rest
-          was dropped.
-        </Alert>
-      )}
-    </Stack>
-  );
+function verdictText({ verdict, gfa_shortfall_m2, reason }) {
+  if (verdict === "ok") {
+    return "Feasible";
+  }
+  if (verdict === "gfa_missed") {
+    return `GFA target missed by ${formatNumber(gfa_shortfall_m2, 1)} m2`;
+  }
+  return `Infeasible: ${REASON_TEXT[reason]}`;
 }
 
-function MetricsTable({ metrics, parentMetrics }) {
+function MetricsTable({ metrics, parent }) {
+  const parentMetrics = parent?.result.metrics;
   return (
     <Table size="small" sx={{ tableLayout: "fixed" }}>
       <TableHead>
         <TableRow>
           <TableCell />
-          <TableCell align="right" sx={{ width: 104 }}>
-            parent
+          <TableCell align="right" sx={{ width: PARENT_COLUMN_WIDTH }}>
+            <Typography variant="inherit" noWrap>
+              {parent && (parent.name || "unnamed")}
+            </Typography>
           </TableCell>
-          <TableCell align="right" sx={{ width: 88 }}>
-            this
+          <TableCell align="right" sx={{ width: VALUE_COLUMN_WIDTH }}>
+            current
           </TableCell>
         </TableRow>
       </TableHead>
       <TableBody>
-        {METRICS.map(([key, label, digits]) => {
-          const value = fmt(metrics[key], digits);
-          const was = parentMetrics ? fmt(parentMetrics[key], digits) : null;
+        {METRICS.map(({ key, label, digits }) => {
+          const value = formatNumber(metrics[key], digits);
+          const parentValue = parentMetrics
+            ? formatNumber(parentMetrics[key], digits)
+            : null;
+          const differs = parentValue !== null && parentValue !== value;
           return (
             <TableRow
               key={key}
               sx={{
-                bgcolor:
-                  was !== null && was !== value
-                    ? (t) => alpha(t.palette.warning.main, 0.16)
-                    : undefined,
+                bgcolor: differs
+                  ? (theme) => alpha(theme.palette.secondary.main, 0.16)
+                  : undefined,
               }}
             >
               <TableCell>{label}</TableCell>
               <TableCell align="right" sx={{ color: "text.secondary" }}>
-                {was === null ? "" : `${was} ->`}
+                {parentValue === null ? "" : `${parentValue} ->`}
               </TableCell>
               <TableCell align="right">{value}</TableCell>
             </TableRow>
@@ -135,39 +150,35 @@ export default function Inspector({
   name,
   onNameChange,
   result,
-  previewError,
   showParent,
   onShowParent,
   onAdd,
+  edited,
+  onReset,
   saving,
   error,
 }) {
-  const parentConstraints = showParent && parent ? parent.constraints : null;
-  const errors = splitError(previewError);
+  const compared = showParent ? parent : null;
+  const differsFromParent = (key) =>
+    compared && String(compared.constraints[key] ?? "") !== form[key];
+  const identical =
+    compared && !FIELDS.some(({ key }) => differsFromParent(key)); // an empty comparison is not a broken one
+  const rejected = error?.status === 422; // a rejected input belongs to the form; anything else is the banner
+  const errors = splitError(rejected ? error : null);
   return (
-    <Paper
-      sx={{
-        position: "absolute",
-        top: 8,
-        right: 8,
-        bottom: 8,
-        width: INSPECTOR_WIDTH,
-        overflow: "auto",
-      }}
-    >
+    <Paper sx={{ gridArea: "1 / 2 / 3 / 3", overflow: "auto" }}>
       <Stack spacing={1.5} sx={{ p: 2 }}>
         <TextField
           label="Option name"
           value={name}
-          onChange={(e) => onNameChange(e.target.value)}
+          onChange={(event) => onNameChange(event.target.value)}
           size="small"
           slotProps={{ htmlInput: { maxLength: 30 } }}
         />
         <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
-          {FIELDS.map(([key, label, htmlInput]) => {
-            const was = parentConstraints?.[key];
-            const changed =
-              parentConstraints && String(was ?? "") !== form[key];
+          {FIELDS.map(({ key, label, input }) => {
+            const parentValue = compared?.constraints[key];
+            const changed = differsFromParent(key);
             return (
               <TextField
                 key={key}
@@ -175,17 +186,17 @@ export default function Inspector({
                 type="number"
                 size="small"
                 value={form[key]}
-                onChange={(e) => onFormChange(key, e.target.value)}
-                color={changed ? "warning" : undefined}
+                onChange={(event) => onFormChange(key, event.target.value)}
+                color={changed ? "secondary" : undefined}
                 focused={changed || undefined}
                 slotProps={{
-                  htmlInput,
+                  htmlInput: input,
                   formHelperText: { sx: errorHelperSx },
                   input: changed
                     ? {
                         startAdornment: (
                           <InputAdornment position="start">
-                            {was ?? "none"} {"->"}
+                            {parentValue ?? "none"} {"->"}
                           </InputAdornment>
                         ),
                       }
@@ -206,38 +217,57 @@ export default function Inspector({
             {errors.general}
           </Typography>
         )}
-        {result && (
-          <MetricsTable
-            metrics={result.metrics}
-            parentMetrics={showParent ? parent?.result.metrics : null}
-          />
-        )}
+        {result && <MetricsTable metrics={result.metrics} parent={compared} />}
         <FormControlLabel
           control={
             <Switch
               checked={showParent}
-              onChange={(e) => onShowParent(e.target.checked)}
+              onChange={(event) => onShowParent(event.target.checked)}
             />
           }
           label="Compare to parent"
-          disabled={!selected?.parent_id}
+          disabled={!parent}
         />
-        {error && <Alert severity="error">{error}</Alert>}
-        <Button
-          variant="contained"
-          onClick={onAdd}
-          disabled={saving || !result || Boolean(previewError)}
-          sx={{ alignSelf: "flex-start" }}
-        >
-          Add option
-        </Button>
+        {error && !rejected && <Alert severity="error">{error.message}</Alert>}
+        <Stack direction="row" spacing={1}>
+          <Button
+            variant="contained"
+            onClick={onAdd}
+            disabled={saving || !result || rejected}
+          >
+            Add option
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={onReset}
+            disabled={saving || !edited}
+          >
+            Reset option
+          </Button>
+        </Stack>
         <Typography variant="caption" color="text.secondary">
           {selected
             ? `The new option becomes a child of "${selected.name || "unnamed"}".`
             : "The new option becomes a new root."}
         </Typography>
         {result && <Divider />}
-        {result && <VerdictAlert result={result} />}
+        {result && (
+          <Alert severity={VERDICT[result.verdict].color}>
+            {verdictText(result)}
+          </Alert>
+        )}
+        {result?.footprint_split && result.footprint && (
+          <Alert severity="info">
+            The footprint split: the building stands on the kept part, the rest
+            was dropped.
+          </Alert>
+        )}
+        {identical && (
+          <Alert severity="warning">
+            Nothing differs from the parent: the same constraints give the same
+            result.
+          </Alert>
+        )}
       </Stack>
     </Paper>
   );

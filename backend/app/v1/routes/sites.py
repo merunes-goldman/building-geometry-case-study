@@ -30,7 +30,10 @@ async def create_site(body: SiteIn, conn: Connection) -> Site:
         polygon = normalize_polygon(body.polygon)
     except PolygonError as error:
         raise HTTPException(422, str(error)) from error
-    return await storage.insert_site(conn, body.name, polygon)
+    site = await storage.insert_site(conn, body.name, polygon)
+    if site is None:
+        raise HTTPException(409, "a site with this name already exists")
+    return site
 
 
 @router.get("")

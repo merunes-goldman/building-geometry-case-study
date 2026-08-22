@@ -1,11 +1,10 @@
 import Box from "@mui/material/Box";
 import LinearProgress from "@mui/material/LinearProgress";
 import { useCallback, useEffect, useRef, useState } from "react";
-import Inspector, { INSPECTOR_WIDTH } from "./components/Inspector.jsx";
+import Inspector from "./components/Inspector.jsx";
 import Plan from "./components/Plan.jsx";
-import TopPanel, { TOP_PANEL_HEIGHT } from "./components/TopPanel.jsx";
+import TopPanel from "./components/TopPanel.jsx";
 import {
-  ApiError,
   createOption,
   createSite,
   listOptions,
@@ -25,7 +24,6 @@ const DEFAULTS = {
   gfa_target_m2: "",
 };
 const PREVIEW_DELAY_MS = 300;
-const GAP = 16;
 
 const toConstraints = (form) =>
   Object.fromEntries(
@@ -51,45 +49,47 @@ export default function App() {
   const [options, setOptions] = useState([]);
   const [selected, setSelected] = useState(null);
   const [form, setForm] = useState(DEFAULTS); // the constraint fields as typed
+  const [edited, setEdited] = useState(true); // false right after a programmatic fill: the snapshot is shown, no preview runs
   const [name, setName] = useState("");
-  const [dirty, setDirty] = useState(true); // false right after a programmatic fill: the snapshot is shown, not a preview
-  const [live, setLive] = useState(null); // the last valid preview
-  const [previewError, setPreviewError] = useState(null);
-  const [pending, setPending] = useState(0); // previews in flight
-  const [showParent, setShowParent] = useState(false);
+  const [result, setResult] = useState(null); // what the plan shows: the snapshot after a click, the preview after an edit
+  const [pendingPreviews, setPendingPreviews] = useState(0); // previews in flight
+  const [showParent, setShowParent] = useState(false); // changed only by the user: the comparison stays on across selections
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const previewNo = useRef(0); // a response with a stale number is dropped
-  const siteNo = useRef(0); // the same for the option list of a site
+  const [error, setError] = useState(null); // the last failed request: a 422 is shown by the form, anything else as a banner
+  const previewCounter = useRef(0); // every preview request gets a number; a response with a stale number is dropped
+  const siteCounter = useRef(0); // the same for the option list of a site
 
-  const site = sites.find((s) => s.id === siteId);
-  const parent = selected?.parent_id
-    ? options.find((o) => o.id === selected.parent_id)
-    : null;
-  const result = dirty ? live : selected?.result;
+  const site = sites.find((candidate) => candidate.id === siteId);
+  // The parent of what the form shows: the selected option's parent while its snapshot is shown,
+  // the selected option itself once the form is edited — the draft will branch from it.
+  const parent = edited
+    ? selected
+    : (options.find((option) => option.id === selected?.parent_id) ?? null);
 
   const reset = useCallback(() => {
     setSelected(null);
     setForm(DEFAULTS);
+    setEdited(true);
     setName("");
-    setDirty(true);
-    setShowParent(false);
-    setPreviewError(null);
     setError(null);
   }, []);
 
   const selectSite = useCallback(
     async (id) => {
-      const no = ++siteNo.current;
+      const requestNo = ++siteCounter.current;
       setSiteId(id);
       setOptions([]);
       reset();
-      setLive(null);
+      setResult(null);
       try {
         const loaded = await listOptions(id);
-        if (no === siteNo.current) setOptions(loaded);
-      } catch (e) {
-        if (no === siteNo.current) setError(e.message);
+        if (requestNo === siteCounter.current) {
+          setOptions(loaded);
+        }
+      } catch (requestError) {
+        if (requestNo === siteCounter.current) {
+          setError(requestError);
+        }
       }
     },
     [reset],
@@ -99,55 +99,67 @@ export default function App() {
     listSites()
       .then((loaded) => {
         setSites(loaded);
-        const first = loaded.find((s) => s.name === "rectangle") ?? loaded[0];
-        if (first) selectSite(first.id);
+        const first =
+          loaded.find((candidate) => candidate.name === "rectangle") ??
+          loaded[0];
+        if (first) {
+          selectSite(first.id);
+        }
       })
-      .catch((e) => setError(e.message));
+      .catch(setError);
   }, [selectSite]);
 
   // Live preview: a short delay after typing; the fields do not lock, requests are counted and numbered.
   useEffect(() => {
-    if (!siteId || !dirty) return undefined;
-    const no = ++previewNo.current;
+    if (!siteId || !edited) {
+      return undefined;
+    }
+    const requestNo = ++previewCounter.current;
     const timer = setTimeout(async () => {
-      setPending((n) => n + 1);
+      setPendingPreviews((count) => count + 1);
       try {
-        const preview = await previewMassing(siteId, toConstraints(form));
-        if (no === previewNo.current) {
-          setLive(preview);
-          setPreviewError(null);
+        const computed = await previewMassing(siteId, toConstraints(form));
+        if (requestNo === previewCounter.current) {
+          setResult(computed);
           setError(null);
         }
-      } catch (e) {
-        if (no !== previewNo.current) return;
-        if (e instanceof ApiError)
-          setPreviewError(e.message); // a rejected input: shown by the form
-        else setError(e.message); // anything else: one banner, the last valid result stays
+      } catch (requestError) {
+        if (requestNo === previewCounter.current) {
+          setError(requestError); // the last valid result stays on the plan
+        }
       } finally {
-        setPending((n) => n - 1);
+        setPendingPreviews((count) => count - 1);
       }
     }, PREVIEW_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [siteId, form, dirty]);
+  }, [siteId, form, edited]);
 
   function selectOption(option) {
-    previewNo.current += 1; // a preview still in flight must not overwrite the snapshot
+    previewCounter.current += 1; // a preview still in flight must not land after the snapshot
     setSelected(option);
     setForm(fromConstraints(option.constraints));
+    setEdited(false);
     setName("");
-    setDirty(false);
-    setLive(option.result);
-    setShowParent(false);
-    setPreviewError(null);
+    setResult(option.result);
+    setError(null);
   }
 
   function changeField(key, value) {
-    setForm((f) => ({ ...f, [key]: value }));
-    setDirty(true);
+    setForm((fields) => ({ ...fields, [key]: value }));
+    setEdited(true);
+  }
+
+  // Back to where the draft started: the selected option's snapshot, or the defaults.
+  function discardDraft() {
+    if (selected) {
+      selectOption(selected);
+    } else {
+      reset();
+    }
   }
 
   async function addOption() {
-    const no = siteNo.current; // the site can be switched while the save is in flight
+    const requestNo = siteCounter.current; // the site can be switched while the save is in flight
     setSaving(true);
     try {
       const option = await createOption(siteId, {
@@ -155,12 +167,15 @@ export default function App() {
         parent_id: selected?.id ?? null,
         constraints: toConstraints(form),
       });
-      if (no !== siteNo.current) return;
+      if (requestNo !== siteCounter.current) {
+        return;
+      }
       setOptions((all) => [...all, option]);
       selectOption(option);
-      setError(null);
-    } catch (e) {
-      if (no === siteNo.current) setError(e.message);
+    } catch (requestError) {
+      if (requestNo === siteCounter.current) {
+        setError(requestError);
+      }
     } finally {
       setSaving(false);
     }
@@ -178,54 +193,60 @@ export default function App() {
   }
 
   return (
-    <Box sx={{ position: "fixed", inset: 0 }}>
-      {saving && (
-        <LinearProgress
-          sx={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 1 }}
-        />
-      )}
+    // Two columns (the plan, the 440 px inspector) and two rows (the top panel, the rest); the inspector spans both rows.
+    // The page is never narrower than 880 px: below that the outer box scrolls sideways.
+    <Box sx={{ height: "100vh", overflowX: "auto" }}>
       <Box
         sx={{
-          position: "absolute",
-          top: TOP_PANEL_HEIGHT + GAP,
-          left: 0,
-          right: INSPECTOR_WIDTH + GAP,
-          bottom: 0,
+          minWidth: 880,
+          height: "100%",
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1fr) 440px",
+          gridTemplateRows: "auto minmax(0, 1fr)",
+          gap: 2,
+          p: 1,
         }}
       >
+        {saving && (
+          <LinearProgress
+            sx={{ position: "fixed", top: 0, left: 0, right: 0 }}
+          />
+        )}
+        <TopPanel
+          sites={sites}
+          siteId={siteId}
+          onSelectSite={selectSite}
+          onCreateSite={addSite}
+          saving={saving}
+          options={options}
+          selected={selected}
+          edited={edited}
+          onSelect={selectOption}
+          onNew={reset}
+        />
         <Plan
           site={site}
           footprint={result?.footprint}
           parentFootprint={showParent ? parent?.result.footprint : null}
-          recomputing={pending > 0}
+          recomputing={pendingPreviews > 0 && edited}
+        />
+        <Inspector
+          selected={selected}
+          parent={parent}
+          form={form}
+          onFormChange={changeField}
+          name={name}
+          onNameChange={setName}
+          result={result}
+          showParent={showParent}
+          onShowParent={setShowParent}
+          onAdd={addOption}
+          edited={edited}
+          onReset={discardDraft}
+          saving={saving}
+          error={error}
         />
       </Box>
-      <TopPanel
-        sites={sites}
-        siteId={siteId}
-        onSelectSite={selectSite}
-        onCreateSite={addSite}
-        saving={saving}
-        options={options}
-        selected={selected}
-        onSelect={selectOption}
-        onNew={reset}
-      />
-      <Inspector
-        selected={selected}
-        parent={parent}
-        form={form}
-        onFormChange={changeField}
-        name={name}
-        onNameChange={setName}
-        result={result}
-        previewError={previewError}
-        showParent={showParent}
-        onShowParent={setShowParent}
-        onAdd={addOption}
-        saving={saving}
-        error={error}
-      />
     </Box>
   );
 }

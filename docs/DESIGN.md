@@ -14,10 +14,12 @@ In scope:
 
 - 5 constraints (setback, floor-to-floor height, building height limit, floor count limit, site coverage ratio)
 - 1 target to aim for (GFA)
+- the brief's other forms of these two — a maximum footprint area and a FAR target — are the same rules in other units (area = ratio x site area, GFA = FAR x site area); not added
 - 1 building
 - identical above-ground floors: every floor plate is the whole footprint, the height is the same
 - a single setback for the whole perimeter
 - option tree: save an option, branch from it, compare with the parent
+- site names are unique — the site list is the namespace; option names are free labels (see "Tree rules")
 - an **infeasible** result is a normal result: it is saved in the tree like any other option, shown with the reason, and the user can branch from it
 - any site polygon (a single ring, no holes) via the API, with full validation
 - flat site, no terrain
@@ -52,6 +54,7 @@ There are two entities to persist: **site** and **option**. Constraints and the 
 ### Tree rules
 
 - An option is immutable once saved; an edit is a new branch. The tree stays an honest history of experiments, and any two options remain comparable. This covers the name too: no renaming in the prototype — it comes together with archiving (roadmap).
+- An option name is a label, not an identifier: it is optional and need not be unique — the id is the identity, and the list shows the position in the tree. Unique option names within a site — roadmap. A site name is unique: the site list is the namespace, and the template sites are found by name.
 - An option is self-contained: it stores the full set of constraints, not a diff from the parent. Reading needs no walk over ancestors; comparing two options is comparing two table rows.
 - A site can have several roots — several independent trees. The parent link means "branched from"; if there were always a single root, a fresh start would have to be attached to an unrelated root with a fake link.
 - No deletion of options, by design: an option is part of the history and may have children. The real future need is hiding dead-end branches without erasing them — that is archiving, and it is in the roadmap. The prototype needs neither deletion nor archiving: trees are small, and extra rows cost nothing.
@@ -84,7 +87,7 @@ Column suffixes _m and _m2 are the units: metres and square metres. Polygons are
 | column | type | purpose |
 |---|---|---|
 | id | uuid | |
-| name | text | 1 to 30 characters |
+| name | text | unique, 1 to 30 characters after trimming |
 | polygon | jsonb | polygon vertices, metres |
 | created_at | timestamptz | |
 
@@ -95,13 +98,13 @@ Column suffixes _m and _m2 are the units: metres and square metres. Polygons are
 | id | uuid | |
 | site_id | uuid | the site; all its options are read by this key |
 | parent_id | uuid, optional | the parent option; empty for a root |
-| name | text, optional | option name, 1 to 30 characters |
+| name | text, optional | option name, 1 to 30 characters after trimming |
 | setback_m | double precision | setback |
 | floor_to_floor_m | double precision | floor-to-floor height |
 | max_height_m | double precision, optional | height limit; at least one of the two limits is set |
 | max_floors | integer, optional | floor count limit |
 | site_coverage_ratio | double precision, optional | site coverage; without it there is no additional inset (see Algorithm, step 3) |
-| gfa_target_m2 | double precision, optional | GFA target |
+| gfa_target_m2 | double precision, optional | GFA target, above zero |
 | footprint | jsonb, optional | the footprint polygon after the setback and the additional inset (the kept part if it split); empty only when nothing is left of the footprint |
 | footprint_split | boolean | the **footprint split** flag |
 | created_at | timestamptz | |
@@ -110,7 +113,7 @@ site_id and parent_id are foreign keys (the API additionally checks that the par
 
 **Seeding.** On backend start, if the sites table is empty, the template sites from data/sites are inserted as ordinary rows — after that they are no different from user-created ones.
 
-Constraints are separate columns, not one jsonb field: there are five of them and the set is known; columns give types and database-level checks. The price is a schema change for every new constraint (the prototype has no migration tool: the schema is applied on start, an existing database is recreated); fine for the prototype, moving to jsonb when the list grows — roadmap.
+Constraints are separate columns, not one jsonb field: there are five of them and the set is known; columns give types and database-level checks. The price is a schema change for every new constraint (the prototype has no migration tool: the schema is applied on start with CREATE TABLE IF NOT EXISTS, a schema change means dropping the tables by hand); fine for the prototype, moving to jsonb when the list grows — roadmap.
 
 ## Algorithm
 
@@ -125,15 +128,15 @@ The only non-trivial operation is the inset (shrinking the polygon inwards by th
 | **Shapely** | the GEOS geometry core — the same one behind PostGIS and QGIS; the inset is a ready-made operation, including the cases where the footprint vanishes or splits; polygon validation and area computation come with it | a general-purpose library, not a special tool: its behaviour on edge cases is pinned by tests |
 | Clipper | a special tool exactly for polygon offsetting | works in integers — metres must be scaled back and forth; no validation, no area computation — a second library would be needed |
 | PostGIS (the geo extension of PostgreSQL) | the same geometry with the database already in place | the computation moves into the database — impossible to test or reuse separately from it |
-| CGAL | mathematically strict inner offset (straight skeleton) | a big C++ library; Python bridges are unofficial and rarely updated |
+| CGAL | mathematically strict inner offset (straight skeleton) | a big C++ library; the Python bindings are a separate SWIG project, not part of CGAL |
 | hand-written implementation | no dependencies | a correct inset of a concave polygon is exactly the hard part; it would eat the whole time budget of the prototype |
 
 The choice: **Shapely** — one dependency covers the inset, the validation and the area computation.
 
 ### Computation steps
 
-1. **Polygon validation.** The polygon must be usable: at least three vertices, non-zero area, no self-intersections. A broken polygon is rejected with an explanation of the reason — no silent fixing.
-2. **Setback.** Inset the polygon inwards by the setback — this gives the buildable footprint. Corners stay sharp, no rounding: the setback border follows the turns of the site border. Three outcomes: a normal footprint — continue; nothing left — the verdict is **infeasible**; the footprint split into parts — build on the largest one and raise the **footprint split** flag (after sliver removal — see "Sliver threshold" below). Part areas are compared with a tolerance (square millimetres). If several parts tie for the largest, take the one whose left edge is furthest left; if the left edges match too, the one whose bottom edge is lower. The only point of this rule is repeatability: without it the choice would depend on library internals.
+1. **Polygon validation.** The polygon must be usable: at least three distinct vertices, no self-intersections, a non-zero finite area (coordinates beyond double precision make the area underflow to zero or overflow to infinity). A broken polygon is rejected with an explanation of the reason — no silent fixing.
+2. **Setback.** Inset the polygon inwards by the setback — this gives the buildable footprint. Corners stay sharp, no rounding: the setback border follows the turns of the site border, with one limit from the library — a footprint corner that would lie further than five setbacks from its site vertex is cut off flat at that distance; this happens only at a notch (a reflex corner) sharper than about 23 degrees, never at a convex corner. Three outcomes: a normal footprint — continue; nothing left — the verdict is **infeasible**; the footprint split into parts — build on the largest one and raise the **footprint split** flag (after sliver removal — see "Sliver threshold" below). Part areas are compared with a tolerance (square millimetres). If several parts tie for the largest, take the one whose left edge is furthest left; if the left edges match too, the one whose bottom edge is lower. The only point of this rule is repeatability: without it the choice would depend on library internals.
 3. **Site coverage.** If the coverage ratio is set and the footprint takes more than the allowed share of the site, shrink it further — the same inset operation — until it fits. Shrinking, not rejecting: the answer is "the most that can be built here", not "bad input". Details:
    - the goal is to bring the footprint area to the allowed one: the coverage ratio times the site area (GFA is not involved). The allowed area is compared with the area of the kept part after sliver removal;
    - how far to shrink is found by binary search with millimetre precision; the precision, like the sliver threshold, is arbitrary — it only has to be far below any meaningful size on the plan;
@@ -166,10 +169,10 @@ The result: the footprint polygon, the metrics, the verdict with its reason and 
 
 What is rejected and what is a result:
 
-- **Input error** (HTTP 422, nothing is saved) — the question makes no sense: a broken polygon (self-intersection, fewer than three vertices, zero area); values out of bounds (negative setback, zero floor-to-floor height, coverage outside (0, 1]); neither of the two limits (height, floor count) is set. Value bounds are declared once, on the pydantic model of the constraints that the core and the API share; the polygon geometry is checked by the core. Option creation adds one more 422 — a parent_id from another site (see "API contract").
+- **Input error** (HTTP 422, nothing is saved) — the question makes no sense: a broken polygon (self-intersection, fewer than three distinct vertices, a zero or non-finite area); values out of bounds (a negative setback, a zero floor-to-floor height, a negative height or floor limit, a GFA target of zero or below, coverage outside (0, 1], an infinite number); neither of the two limits (height, floor count) is set. Value bounds are declared once, on the pydantic model of the constraints that the core and the API share; the polygon geometry is checked by the core. Option creation adds one more 422 — a parent_id from another site (see "API contract").
 - **The infeasible verdict** (a normal result, saved as an option) — the question makes sense and the answer is "nothing can be built": the setback or the additional inset destroyed the footprint, or no floor fits under the limits.
 
-There are no upper "reasonable value" bounds: a thousand floors is valid input and does not break the computation; such checks are in the roadmap (the only cap is technical: max_floors must fit the integer column). "Zero floors" is not rejected at validation either, although arithmetically it could be: it is an answer the architect must see, save in the tree and branch from, relaxing the constraints.
+There are no upper "reasonable value" bounds: a thousand floors is valid input and does not break the computation; such checks are in the roadmap (the caps are technical: the floor count must fit the integer column — max_floors is validated against it, floors by height are clipped to it; the polygon's area must be a finite number; the coverage search stops after 64 halvings, where double precision stops halving). "Zero floors" is not rejected at validation either, although arithmetically it could be: it is an answer the architect must see, save in the tree and branch from, relaxing the constraints.
 
 ### Sliver threshold
 
@@ -189,7 +192,7 @@ Everything below is recomputed on read from the stored columns — nothing here 
 - GFA target shortfall — gfa_target_m2 minus GFA, when the target is set and missed
 - verdict — the footprint is empty: **infeasible**; the floor count is zero: **infeasible**; otherwise **feasible**, or **GFA target missed** if the target is set and not reached
 
-The read path reuses the core's helpers for these formulas, and a test compares a fresh computation with the read-time derivation — the two cannot drift apart silently.
+The read path reuses the core's helpers for these formulas, and an API test compares an option read back from the database with an independent fresh computation — the stored footprint and the read-time derivation cannot drift from the core silently.
 
 ### Tests
 
@@ -201,16 +204,21 @@ Template sites, answers computed by hand:
 - the choice of the largest part is tested on an asymmetric polygon: on the notched site the split parts are always equal, so that test cannot show which part the code took; the equal-parts rule — take the leftmost — is checked on the notched site itself;
 - the set with a 12 m setback shows that feasibility depends on the site: on the notched site the footprint is destroyed — **infeasible**, while on the 40x25 rectangle a 16x1 = 16 sq. m strip remains and 2 floors fit — **feasible**;
 - the "no floor fits" reason is tested with a separate set where the height limit is below one floor-to-floor height;
-- broken polygons — a figure-eight self-intersection, two vertices, zero area — give an input error with an explanation;
+- broken polygons — a figure-eight self-intersection, two vertices, a repeated vertex, a flat ring, an area that underflows to zero or overflows to infinity — give an input error with an explanation;
 - a GFA target above the reachable maximum gives the **GFA target missed** verdict with the exact shortfall in sq. m;
-- coverage and a GFA target together: the "tower" set on the L-shaped site — **GFA target missed** with the exact shortfall;
+- coverage and a GFA target together: the "tower" set with a 30% cap on the L-shaped site — the cap shrinks the footprint to 270 sq. m and the GFA target is still missed, with the exact shortfall;
+- when the footprint is destroyed and no floor fits at once, the footprint reason is reported;
+- a limit reached exactly is not exceeded: a coverage of 0.646 on the 646 sq. m footprint needs no inset, a GFA target equal to the GFA is met;
+- the coverage search ends on an astronomic site (1e14 m), where halving stalls at float precision;
 - the additional inset for coverage can split the footprint too: a thin neck survives the setback but not the coverage inset — the flag is raised and the area jumps well below the limit;
 - a coverage limit below the sliver threshold destroys the footprint — **infeasible**;
 - slivers are removed before the split analysis: a 0.25 sq. m piece left by the inset raises no false **footprint split** flag;
 - the floor-count rules on their own: the 9.6 / 3.2 tolerance, one limit acting alone, at least one limit required;
-- the read-time derivation of a saved result matches the fresh computation (see "Derived values").
+- an infinite number is rejected as input; a height limit worth more floors than the integer column holds is clipped, not crashed.
 
-The API layer is tested too: an end-to-end scenario — create a site, a root, a branch from it, read the tree; seeding of the template sites into an empty database; a check that the preview adds no rows to the database; error codes — 422 (polygon, value bounds, name length, parent_id from another site) and 404.
+The API layer is tested too: an end-to-end scenario — create a site, a root, a branch from it, read the tree, and check that an option read back equals a fresh computation of the core (see "Derived values"); options listed per site; seeding of the template sites into an empty database; a check that the preview adds no rows to the database; error codes — 422 (polygon, value bounds, name length, parent_id from another site), 409 (a site name already in use) and 404.
+
+The frontend has no automated tests: the Behaviour list in "Visualization" was checked by hand in the browser, and CI lints and builds it. Unit tests for its two pure helpers — the tree order of the option list and the mapping of validation errors to fields — are the first thing to add.
 
 ## API contract
 
@@ -288,7 +296,7 @@ The response:
 }
 ```
 
-Errors: 422 — a broken polygon, values out of bounds, a name outside 1 to 30 characters, or a parent_id that is missing or from another site; 404 — no such site or option. Every error body is { detail } with a single human-readable string, whichever layer rejected the request. The **infeasible** verdict is not an error (see "Input error or the infeasible verdict" in Algorithm).
+Success is 201 for the two creating POSTs and 200 otherwise. Errors: 422 — a broken polygon, values out of bounds, a name outside 1 to 30 characters, or a parent_id that is missing or from another site; 409 — a site name already in use; 404 — no such site or option. Every error body is { detail }: one human-readable string from the API's own checks (the polygon, the parent, not found), and for request validation the framework's standard list of { loc, msg, type } — the client attaches each message to its field by loc. An unexpected server failure is the framework's plain 500: the prototype has no catch-all handler. The **infeasible** verdict is not an error (see "Input error or the infeasible verdict" in Algorithm).
 
 ## Visualization
 
@@ -306,11 +314,11 @@ The scene is tiny: two polygons with a dozen vertices each. With the backend it 
 
 The choice: **SVG rendered by React**, no libraries. Libraries become appropriate later, and that is in the roadmap: drawing the site with the mouse is exactly a task for Konva or Fabric, the 3D view — for three.js.
 
-The panels around the scene are ordinary UI, and there a component library is appropriate: **MUI** (form fields, lists, buttons, dialogs, banners). The choice is mostly taste: the needed set of components is small and any mainstream kit covers it (Ant Design, Chakra, Mantine — or the stock browser controls, which take longer to make look decent). The deciding argument is familiarity: MUI is the most downloaded of them on npm, I have used it before and I like how it looks; the time is better spent on the core of the task than on learning a new library.
+The panels around the scene are ordinary UI, and there a component library is appropriate: **MUI** (form fields, lists, buttons, dialogs, banners). The choice is mostly taste: the needed set of components is small and any mainstream kit covers it (Ant Design, Chakra, Mantine — or the stock browser controls, which take longer to make look decent). The deciding argument is familiarity: I have used it before and I like how it looks; the time is better spent on the core of the task than on learning a new library.
 
 ### The screen
 
-The layout is Figma-like: the canvas with the plan takes the whole screen, and the panels float on top of it. Panel hiding — roadmap.
+The plan fills the area the panels leave free; the panels are fixed. The interface is made for desktop windows: the page is never narrower than 880 px (below that it scrolls sideways), and in a narrow window the top panel wraps its controls instead of running under the inspector.
 
 ```
 +----------------------------------------------------------+
@@ -320,36 +328,35 @@ The layout is Figma-like: the canvas with the plan takes the whole screen, and t
 |                                     +------------------+ |
 |                                     | selected option: | |
 |   plan (full screen):               | form, metrics,   | |
-|   site polygon + footprint          | verdict, button  | |
+|   site polygon + footprint          | button, verdict  | |
 |                                     +------------------+ |
 +----------------------------------------------------------+
 ```
 
 - **The plan (full screen).** Top-down view: the site polygon and the buildable footprint. Redrawn on every recomputation; fitted into the area free of panels.
-- **The top panel.** The "Create site" button — a dialog with a name and coordinates pasted as text (an array of [x, y] pairs) — then site selection and the option list. The option list is a dropdown: "New option" first, then all options of the site in a single list, nesting shown by indents, roots as top-level rows; a row carries the name, GFA, floor count and a verdict mark, so a rough comparison is readable straight from the list. At the end, a backend health mark (GET /health, polled), so an unreachable backend is visible before the first failed request. The template sites are pre-seeded (see "Database schema"); drawing the site with the mouse — roadmap.
-- **The inspector (right).** The selected option: the constraint fields, the metrics and the verdict, and the controls — the "Add option" button and the "Compare to parent" toggle. Next to "Add option" a note explains what the new option will become: a child of the selected one or a new root. "Compare to parent" shows the parent's metrics before the current ones as "parent value -> this value", the differing rows tinted, the parent's value with the same arrow at the start of each changed field, and its polygon dashed on the plan (details in Behaviour).
+- **The top panel.** The "Create site" button — a dialog with a name and coordinates pasted as text (an array of [x, y] pairs) — then site selection and the option list. The option list is a dropdown: "New option" first, then all options of the site in a single list, nesting shown by indents, roots as top-level rows; a row carries the name, GFA, floor count and a verdict mark, so a rough comparison is readable straight from the list. The closed dropdown names what the form shows: the selected option or, once the form is edited, the draft — "New option from X" — with X's row still marked. At the end, a backend health mark (GET /health, polled), so an unreachable backend is visible before the first failed request. The template sites are pre-seeded (see "Database schema") and the rectangle opens first; drawing the site with the mouse — roadmap.
+- **The inspector (right).** The selected option, top to bottom: the constraint fields, the metrics, the controls — the "Compare to parent" toggle, the "Add option" and "Reset option" buttons — and the verdict last, so a verdict that changes its size moves nothing above it. Next to "Add option" a note explains what the new option will become: a child of the selected one or a new root. "Compare to parent" — the parent of what the form shows (see Behaviour) — fills the parent column of the metrics table (the column is always there, so the layout does not jump; its header is the parent's name, empty while the comparison is off) as "parent value -> current value", the differing rows tinted, the parent's value with the same arrow at the start of each changed field, and its polygon dashed on the plan (details in Behaviour).
 
 ### Behaviour
 
-1. The user picks a site and enters constraints; the preview recomputes on every change (POST /massing/preview, with a short delay after typing). Switching the site clears the selection, resets the form and recomputes the plan right away — the old site's footprint does not stay on the plan. A reset returns the form to valid defaults, so the immediate recomputation always has a computable set of constraints.
+1. The user picks a site and enters constraints; the preview recomputes on every change (POST /massing/preview, with a short delay after typing). Switching the site clears the selection, resets the form and recomputes the plan without waiting for an edit — the old site's footprint does not stay on the plan. A reset returns the form to valid defaults, so the immediate recomputation always has a computable set of constraints.
 2. "Add option" saves the computation — as a child of the option selected in the list or, when nothing is selected, as a new root (the start of a new tree). The selection moves to the new option: the next edit branches from it.
-3. Clicking an option shows its snapshot from the database (the footprint, the metrics) and fills the form with its constraints; the preview turns on with the first manual edit — programmatic filling does not trigger a recomputation. "New option" in the list repeats the reset of a site switch: there is no snapshot left to protect.
-4. Comparison with the parent: a selected non-root option has the "Compare to parent" toggle — the parent's polygon is drawn dashed over the plan, its metrics appear in a column next to the current ones in the inspector, and the changed constraints and differing metrics are highlighted. Comparing any two options — roadmap.
-5. The verdict on screen: **feasible** — the normal view; **GFA target missed** — a yellow banner with the shortfall; **infeasible** — a red banner with the reason. The footprint leaves the plan only when it is destroyed; with zero floors the footprint exists, is stored and is shown. With the **footprint split** flag a note next to the verdict says the building stands on the kept part — the rest of the footprint was dropped.
+3. Clicking an option shows its snapshot from the database (the footprint, the metrics) and fills the form with its constraints; the preview turns on with the first manual edit — programmatic filling does not trigger a recomputation. From the first edit the list names the draft, "New option from X", with X's row still marked; "Reset option" — or clicking that row again — discards the draft and restores the snapshot (with nothing selected, "Reset option" returns the form to the defaults). "New option" in the list resets the form the same way — there is no snapshot left to protect; the previous result stays on screen until the preview of the defaults replaces it, so nothing flashes blank.
+4. Comparison with the parent: the "Compare to parent" toggle is there whenever what the form shows has a parent — a selected non-root option, or an edited form, whose parent is the selected option (the draft branches from it, so it is compared with that option, not with that option's parent); the toggle keeps its state across selections and "Reset option", and is disabled where there is no parent — the parent's polygon is drawn dashed over the plan, its metrics fill the parent column in the inspector, and the changed constraints and differing metrics are highlighted; when nothing differs, a warning says so — an empty comparison must not look like a broken one.
+5. The verdict on screen: **feasible** — the normal view; **GFA target missed** — an orange (warning) banner with the shortfall; **infeasible** — a red banner with the reason. The footprint leaves the plan only when it is destroyed; with zero floors the footprint exists, is stored and is shown. With the **footprint split** flag a note next to the verdict says the building stands on the kept part — the rest of the footprint was dropped.
 6. Buttons that create data ("Add option", site creation) are disabled for the duration of the request; the loading is shown by a single shared indicator: frantic clicking creates no duplicates and breaks nothing. The preview does not lock the fields — that would kill the live recomputation; instead the plan gets a "recomputing" indicator, the requests are numbered, and a response with a stale number is dropped; no request cancellation is needed.
-7. Request errors: on a preview 422 the plan keeps the last valid footprint and the reason is shown under the offending field; a failed save shows a banner with the text, and the buttons unlock.
+7. Request errors: a 422 — from the preview or from a save — keeps the last valid footprint on the plan and shows the reason under the offending field (a message without a field goes under the form); any other failure shows a banner with the text — in the inspector, or under the polygon field in the "Create site" dialog — and the buttons unlock.
 
 ### Drawing details
 
 - Coordinates are in metres with the Y axis pointing up; in SVG the Y axis grows downwards, so the drawing flips it.
-- No pan and zoom: the site is fitted into the area free of panels automatically (the viewBox follows the polygon's bounding box); pan and zoom — roadmap.
-- Comparing any two options (overlaid footprints, a table of differences) — roadmap; in the prototype — the metrics in the list rows and the parent overlay.
+- The site is fitted into the area free of panels automatically (the viewBox follows the polygon's bounding box); no pan and zoom.
 
 ## Assumptions & trade-offs
 
 **Data model:**
 
-- A site and an option are immutable: a new polygon is a new site, an edit of an option is a new branch. Deletion and archiving — roadmap.
+- A site and an option are immutable: a new polygon is a new site, an edit of an option is a new branch. No deletion (see "Tree rules"); archiving — roadmap.
 - An option is self-contained: the full set of constraints, not a diff from the parent; the price is a few numbers duplicated between options.
 - From the result only the product of the geometry is stored — the footprint and the split flag; the metrics and the verdict are formulas over it, recomputed on read. The asymmetry is deliberate: the stored footprint will not change when the geometry code is updated, while the metrics, when a formula changes, recompute across the whole history — at once and identically. Freezing the metrics at write time was rejected in favour of fewer columns; full protection from logic changes is algorithm versioning (roadmap). This is also where the design would break first: if the user must one day see exactly what was on screen at save time (an audit trail), recompute-on-read stops being enough, and metric freezing with algorithm versioning moves up the roadmap.
 - Trees are small — tens of options per site; large ones — roadmap.
@@ -358,11 +365,13 @@ The layout is Figma-like: the canvas with the plan takes the whole screen, and t
 **API:**
 
 - The computation runs right in the request handler and blocks the event loop; acceptable for a single user, moving it to separate processes — roadmap ("Scale").
+- Reading a list derives the metrics of every option anew (a Shapely area per row): nothing to notice at tens of options per site; dedicated metric columns come with scale (roadmap).
 
 **Interface:**
 
 - Top-down view instead of 3D: with identical floors the volume carries no new data and is expensive. The 3D view — roadmap.
 - Option comparison is the metrics in the list rows and the parent overlay on the plan; comparing any two options — roadmap.
+- A changed constraint is detected by text, not by number: "5.0" typed into a field counts as a change from the parent's 5, though the result is the same. A numeric comparison would have to make sense of half-typed input; the metrics table next to the fields shows the real difference anyway.
 - The site is always fitted whole into the area free of panels; pan and zoom — roadmap.
 - The panels are fixed: no hiding, no dragging; hiding — roadmap.
 
@@ -388,7 +397,8 @@ The layout is Figma-like: the canvas with the plan takes the whole screen, and t
 - the height limit is below one floor-to-floor height: zero floors — the **infeasible** verdict;
 - self-intersection or a degenerate polygon: an input error with an explanation (the checklist is in "Input error or the infeasible verdict");
 - the GFA target is unreachable under the given limits: the verdict with the shortfall in sq. m;
-- slivers from rounding errors: the 1 sq. m sliver threshold (see the assumption above).
+- slivers from rounding errors: the 1 sq. m sliver threshold (see the assumption above);
+- a site name already in use: 409, shown under the name field — site names are unique (see "Tree rules"); two options may share a name.
 
 ## What I'd do next
 
@@ -397,14 +407,14 @@ The order follows the value-to-cost ratio and the dependencies.
 1. **Comparing any two options.** Picking two in the list, overlaid footprints on the plan, a table of constraint and metric differences — a generalization of the prototype's parent comparison. The data is already in the database, the work is entirely on the frontend. The small interface debts go here too: zoom and pan, panel hiding.
 2. **Drawing the site with the mouse.** Direct editing of vertices on the plan; in the prototype the polygon is entered only as text.
 3. **Real-world zoning.** The new constraint kinds and realistic value ranges from "Out of scope", with the numbers from domain experts and regulations. Constraints stop being five numbers: they move to jsonb and a schema version appears; the inset with its own distance per side is the biggest jump in core complexity.
-4. **Algorithm versioning and branch archiving.** Both come from real use: the algorithm changes — an option keeps the version of the computation that produced it; trees grow — dead-end branches get hidden without being erased. Option renaming goes here too: in the prototype the name is frozen together with the other fields.
+4. **Algorithm versioning and branch archiving.** Both come from real use: the algorithm changes — an option keeps the version of the computation that produced it; trees grow — dead-end branches get hidden without being erased. Option renaming goes here too: in the prototype the name is frozen together with the other fields — and with renaming, unique option names: one namespace per site for the given names, unnamed options stay free; not per subtree — the interface refers to an option by name without the tree context, so the namespace is the site.
 5. **The 3D view.** Floors stacked in three.js: the footprint stretched upwards by the floor count. The data is already there (the footprint, the floor count, the floor-to-floor height); the value is clarity.
 6. **GFA target auto-fit.** The target is optional and reachable by different combinations of constraints, so this is a search over the allowed ranges with suggestions on how to cover the shortfall: one floor higher or a wider footprint — unlike the additional inset (Algorithm, step 3), which has a single answer. It needs a stable core, so it comes after the core churn of real-world zoning.
 7. **Multiple buildings.** Building on all parts of a split footprint, keeping the distances between buildings. A building with a shape of its own, not equal to the footprint, goes here too. This changes the model: an option stops being a single polygon.
 8. **Underground floors.** Basements live by their own rules (listed in "Out of scope") — up to an underground footprint wider than the building above: parking under the whole site. A separate extension of the floor model.
 9. **Scale.** Dedicated metric columns for SQL search and sorting, paged tree loading — as the number of users and the size of trees grow. The computation is pure CPU: moving it to separate processes (a worker pool or a task queue via a message broker) keeps it from blocking the event loop of the API server (see "API contract").
 10. **Exporting the result.** To other tools where the architect continues the work, and to a report for the client — for now the result lives only in this interface.
-11. **A site polygon with holes.** No-build zones inside the site: the polygon stops being a single ring. The geometry already handles holes; validation, the wire format and the interface change.
+11. **A site polygon with holes.** No-build zones inside the site: the polygon stops being a single ring. Shapely's inset accepts a polygon with interior rings; validation, the wire format and the interface change.
 12. **Terrain.** Sloped sites change both the computation and the drawing; the "measured from where" question is in "Out of scope".
 13. **Geo-referencing.** Import from cadastre or GeoJSON: the site gets real map coordinates.
 14. **Accounts and collaboration.** The model has no user entity (see "Assumptions & trade-offs"); accounts pull in permissions on sites and trees.

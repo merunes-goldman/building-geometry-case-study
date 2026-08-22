@@ -2,10 +2,8 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from app.config import Config
 from app.db import storage
@@ -45,12 +43,6 @@ def create_app(config: Config) -> FastAPI:
     )
 
     app.include_router(v1_router)
-
-    @app.exception_handler(RequestValidationError)
-    async def validation_error(_: Request, error: RequestValidationError) -> JSONResponse:
-        # One shape for every 422: detail is a single human-readable string (see docs/DESIGN.md, "API contract").
-        detail = "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in error.errors())
-        return JSONResponse({"detail": detail}, status_code=422)
 
     @app.get("/")
     async def root() -> dict:

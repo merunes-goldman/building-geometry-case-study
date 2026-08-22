@@ -21,7 +21,9 @@ Reason = Literal["footprint_collapsed", "zero_floors"]
 _SLIVER_M2 = 1.0  # a piece below this area is rounding debris, not a footprint
 _AREA_TOLERANCE_M2 = 1e-6  # one square millimetre: part areas closer than this tie
 _INSET_PRECISION_M = 1e-3  # binary search step for the coverage inset
+_INSET_SEARCH_STEPS = 64  # halvings: millimetres from any real size, and a hard stop where floats cannot halve further
 _FLOOR_DIVISION_EPS = 1e-9  # 9.6 / 3.2 is 2.999... in floating point and must still give 3 floors
+_MAX_FLOORS = 2_147_483_647  # the range of the integer column
 
 
 class PolygonError(ValueError):
@@ -29,12 +31,13 @@ class PolygonError(ValueError):
 
 
 class Constraints(BaseModel):
-    setback_m: float = Field(ge=0)
-    floor_to_floor_m: float = Field(gt=0)
-    max_height_m: float | None = Field(default=None, ge=0)
-    max_floors: int | None = Field(default=None, ge=0, le=2_147_483_647)  # the range of the integer column
-    site_coverage_ratio: float | None = Field(default=None, gt=0, le=1)
-    gfa_target_m2: float | None = Field(default=None, gt=0)
+    # Infinity and NaN pass the bound checks and would crash the geometry, hence allow_inf_nan=False.
+    setback_m: float = Field(ge=0, allow_inf_nan=False)
+    floor_to_floor_m: float = Field(gt=0, allow_inf_nan=False)
+    max_height_m: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    max_floors: int | None = Field(default=None, ge=0, le=_MAX_FLOORS)
+    site_coverage_ratio: float | None = Field(default=None, gt=0, le=1, allow_inf_nan=False)
+    gfa_target_m2: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def at_least_one_limit(self) -> Self:
@@ -63,11 +66,14 @@ class MassingResult(BaseModel):
 
 def _to_shape(polygon: Polygon) -> ShapelyPolygon:
     """Reject a broken polygon with the reason, no silent fixing."""
-    if len(polygon) < 3:
-        raise PolygonError("a polygon needs at least three vertices")
+    if len({tuple(point) for point in polygon}) < 3:
+        raise PolygonError("a polygon needs at least three distinct vertices")
     shape = ShapelyPolygon(polygon)
-    if not shape.is_valid:  # covers self-intersection and zero-area (flat) rings alike
+    if not shape.is_valid:  # self-intersections, flat rings
         raise PolygonError(explain_validity(shape))
+    # Coordinates beyond double precision make the area underflow to zero or overflow to infinity.
+    if not math.isfinite(shape.area) or shape.area <= 0:
+        raise PolygonError("the polygon's area is zero or not a finite number")
     return shape
 
 
@@ -85,12 +91,12 @@ def _inset(shape: ShapelyPolygon, distance: float) -> tuple[ShapelyPolygon | Non
 
     Returns the kept part (None if nothing is left) and whether the footprint split.
     """
-    parts = [p for p in get_parts(shape.buffer(-distance, join_style="mitre")) if p.area >= _SLIVER_M2]
+    parts = [part for part in get_parts(shape.buffer(-distance, join_style="mitre")) if part.area >= _SLIVER_M2]
     if not parts:
         return None, False
-    largest = max(p.area for p in parts)
-    tied = [p for p in parts if p.area >= largest - _AREA_TOLERANCE_M2]
-    kept = min(tied, key=lambda p: (p.bounds[0], p.bounds[1]))  # leftmost, then lowest
+    largest = max(part.area for part in parts)
+    tied = [part for part in parts if part.area >= largest - _AREA_TOLERANCE_M2]
+    kept = min(tied, key=lambda part: (part.bounds[0], part.bounds[1]))  # leftmost, then lowest
     return kept, len(parts) > 1
 
 
@@ -104,9 +110,12 @@ def _compute_footprint(site: ShapelyPolygon, constraints: Constraints) -> tuple[
         return footprint, split
     # Binary search for the smallest inset that brings the area under the limit.
     # Insetting by half of the smaller bounding-box side always leaves nothing, so `hi` fits.
+    # The step count is capped: on an astronomic site the halving stalls at float precision short of the tolerance.
     min_x, min_y, max_x, max_y = footprint.bounds
     lo, hi = 0.0, min(max_x - min_x, max_y - min_y) / 2
-    while hi - lo > _INSET_PRECISION_M:
+    for _step in range(_INSET_SEARCH_STEPS):
+        if hi - lo <= _INSET_PRECISION_M:
+            break
         mid = (lo + hi) / 2
         part, _ = _inset(footprint, mid)
         if part is None or part.area <= allowed:
@@ -123,7 +132,8 @@ def _floor_count(constraints: Constraints) -> int:
     if constraints.max_floors is not None:
         limits.append(constraints.max_floors)
     if constraints.max_height_m is not None:
-        limits.append(math.floor(constraints.max_height_m / constraints.floor_to_floor_m + _FLOOR_DIVISION_EPS))
+        by_height = constraints.max_height_m / constraints.floor_to_floor_m + _FLOOR_DIVISION_EPS
+        limits.append(math.floor(min(by_height, _MAX_FLOORS)))  # a huge ratio is clipped, not overflowed
     return min(limits)
 
 

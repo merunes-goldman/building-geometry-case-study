@@ -7,19 +7,13 @@ export const errorHelperSx = {
   px: 1,
   py: 0.25,
   borderRadius: "0 0 4px 4px",
-  bgcolor: (t) => alpha(t.palette.error.main, 0.08),
+  bgcolor: (theme) => alpha(theme.palette.error.main, 0.08),
 };
 
-export const VERDICT_COLOR = {
-  ok: "success",
-  gfa_missed: "warning",
-  infeasible: "error",
-};
-export const VERDICT_LABEL = {
-  ok: "feasible",
-  gfa_missed: "target missed",
-  infeasible: "infeasible",
+export const VERDICT = {
+  ok: { color: "success", label: "feasible" },
+  gfa_missed: { color: "warning", label: "GFA target missed" },
+  infeasible: { color: "error", label: "infeasible" },
 };
 
-export const fmt = (value, digits) =>
-  value == null ? "" : Number(value).toFixed(digits);
+export const formatNumber = (value, digits) => value?.toFixed(digits) ?? "";

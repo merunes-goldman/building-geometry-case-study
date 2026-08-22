@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.geometry.massing import Constraints, Polygon, PolygonError, compute_massing, derive, normalize_polygon
+from app.geometry.massing import Constraints, Polygon, PolygonError, compute_massing, normalize_polygon
 
 # --- helpers: template data and small readers ---------------------------------------------------
 
@@ -19,7 +19,8 @@ def _site(name: str) -> Polygon:
 
 def _example(name: str, **overrides: float | None) -> Constraints:
     sets = json.loads((_SITES / "constraints.example.json").read_text())["examples"]
-    fields = {k: v for k, v in next(s for s in sets if s["name"] == name).items() if k not in ("name", "comment")}
+    example = next(entry for entry in sets if entry["name"] == name)
+    fields = {key: value for key, value in example.items() if key not in ("name", "comment")}
     return Constraints(**{**fields, **overrides})
 
 
@@ -132,24 +133,63 @@ def test_gfa_target_above_the_reachable_maximum():
 
 
 def test_coverage_and_gfa_target_together():
-    # "tower" on the L-shaped site: a 5 m setback leaves 300 sq. m (under the 45% cap), 20 floors, GFA 6000 of 9000.
-    result = compute_massing(_site("l-shaped"), _example("tower"))
+    # "tower" on the L-shaped site with a 30% cap: the 5 m setback leaves 300 sq. m, the cap shrinks it to 270
+    # (0.3 of 900); 20 floors give a GFA of about 5400 against the 9000 target.
+    result = compute_massing(_site("l-shaped"), _example("tower", site_coverage_ratio=0.3))
+    assert 270 - 0.2 <= result.metrics.footprint_area_m2 <= 270
     assert result.verdict == "gfa_missed"
-    assert result.gfa_shortfall_m2 == pytest.approx(3000)
+    assert result.gfa_shortfall_m2 == pytest.approx(9000 - result.metrics.gfa_m2)
+
+
+def test_the_footprint_reason_wins_when_no_floor_fits_either():
+    # "notched" with a 12 m setback and a 3 m height limit: the footprint is destroyed and zero floors fit at once.
+    result = compute_massing(_site("notched"), _example("modest", setback_m=12, max_height_m=3))
+    assert result.verdict == "infeasible" and result.reason == "footprint_collapsed"
+
+
+def test_a_limit_reached_exactly_is_not_exceeded():
+    # The rectangle with a 3 m setback is exactly 646 sq. m: a coverage of 0.646 needs no inset, a GFA target of 3876
+    # is met.
+    result = compute_massing(_site("rectangle"), _example("modest", site_coverage_ratio=0.646, gfa_target_m2=3876))
+    assert result.metrics.footprint_area_m2 == 646 and result.verdict == "ok"
+
+
+def test_the_coverage_search_ends_on_an_astronomic_site():
+    # A 1e14 m square: halving the search interval stalls at float precision long before a millimetre; the cap ends it.
+    side = 1e14
+    square: Polygon = [(0, 0), (side, 0), (side, side), (0, side)]
+    result = compute_massing(square, _example("modest", setback_m=0, site_coverage_ratio=0.5))
+    assert 0 < result.metrics.footprint_area_m2 <= 0.5 * side * side
 
 
 @pytest.mark.parametrize(
-    "polygon",
+    ("polygon", "reason"),
     [
-        [(0, 0), (10, 10), (10, 0), (0, 10)],  # figure eight
-        [(0, 0), (10, 0)],  # two vertices
-        [(0, 0), (1, 1), (2, 2)],  # zero area
+        ([(0, 0), (10, 10), (10, 0), (0, 10)], "Self-intersection"),  # figure eight
+        ([(0, 0), (10, 0)], "three distinct vertices"),  # two vertices
+        ([(0, 0), (0, 0), (5, 0)], "three distinct vertices"),  # three vertices, two of them the same point
+        ([(0, 0), (1, 1), (2, 2)], "Self-intersection"),  # a flat ring overlaps itself
+        ([(0, 0), (1e-162, 0), (1e-162, 1e-162), (0, 1e-162)], "area"),  # the area underflows to zero
+        ([(0, 0), (1e200, 0), (1e200, 1e200), (0, 1e200)], "area"),  # the area overflows to infinity
     ],
 )
-def test_broken_polygons_are_rejected_with_a_reason(polygon: Polygon):
-    with pytest.raises(PolygonError) as error:
+@pytest.mark.filterwarnings("ignore:overflow encountered")
+def test_broken_polygons_are_rejected_with_a_reason(polygon: Polygon, reason: str):
+    with pytest.raises(PolygonError, match=reason):
         compute_massing(polygon, _example("modest"))
-    assert str(error.value)
+
+
+@pytest.mark.parametrize(
+    "field", ["setback_m", "floor_to_floor_m", "max_height_m", "site_coverage_ratio", "gfa_target_m2"]
+)
+def test_infinite_values_are_rejected(field: str):
+    with pytest.raises(ValidationError):
+        _example("modest", **{field: float("inf")})
+
+
+def test_a_huge_height_limit_is_clipped_to_the_integer_range():
+    constraints = _example("modest", max_height_m=1e308, floor_to_floor_m=0.5, max_floors=None)
+    assert _floors(constraints) == 2_147_483_647
 
 
 def test_normalize_polygon_makes_the_ring_counter_clockwise_and_open():
@@ -166,9 +206,3 @@ def test_one_limit_acts_alone_and_at_least_one_is_required():
     assert _floors(Constraints(setback_m=0, floor_to_floor_m=3, max_height_m=7)) == 2
     with pytest.raises(ValidationError):
         Constraints(setback_m=0, floor_to_floor_m=3)
-
-
-def test_read_time_derivation_matches_a_fresh_computation():
-    polygon, constraints = _site("l-shaped"), _example("tower")
-    fresh = compute_massing(polygon, constraints)
-    assert derive(polygon, constraints, fresh.footprint, fresh.footprint_split) == fresh
