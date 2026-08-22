@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from httpx import AsyncClient
 
+from app.geometry.massing import Constraints, Polygon, compute_massing
 from tests.conftest import make_app
 
 # --- helpers ------------------------------------------------------------------------------------
@@ -19,8 +20,12 @@ _INFEASIBLE = {
 }
 
 
+def _points(polygon: list[list[int]]) -> Polygon:
+    return [(float(x), float(y)) for x, y in polygon]
+
+
 async def _site_id(client: AsyncClient, name: str) -> str:
-    return next(s["id"] for s in (await client.get("/sites")).json() if s["name"] == name)
+    return next(site["id"] for site in (await client.get("/sites")).json() if site["name"] == name)
 
 
 # --- tests --------------------------------------------------------------------------------------
@@ -28,7 +33,7 @@ async def _site_id(client: AsyncClient, name: str) -> str:
 
 async def test_template_sites_are_seeded_once(client: AsyncClient):
     sites = (await client.get("/sites")).json()
-    assert [s["name"] for s in sites] == ["l-shaped", "notched", "rectangle"]
+    assert [site["name"] for site in sites] == ["l-shaped", "notched", "rectangle"]
     app = make_app()  # a second start against the same database does not seed again
     async with app.router.lifespan_context(app):
         pass
@@ -49,15 +54,35 @@ async def test_create_a_site_a_root_a_branch_and_read_the_tree(client: AsyncClie
     assert root["result"]["metrics"]["floor_count"] == 6
     assert 600 - 0.2 <= root["result"]["metrics"]["footprint_area_m2"] <= 600
 
-    body = {"parent_id": root["id"], "constraints": {**_MODEST, "max_floors": 4}}
-    response = await client.post(f"/sites/{site_id}/options", json=body)
+    branch_constraints = {**_MODEST, "max_floors": 4}
+    response = await client.post(
+        f"/sites/{site_id}/options", json={"parent_id": root["id"], "constraints": branch_constraints}
+    )
     assert response.status_code == 201
     branch = response.json()
     assert branch["parent_id"] == root["id"] and branch["result"]["metrics"]["floor_count"] == 4
+    fresh = compute_massing(_points(_RECTANGLE), Constraints.model_validate(branch_constraints))
+    assert branch["result"] == fresh.model_dump(
+        mode="json"
+    )  # the stored footprint, derived on read, equals a fresh computation
 
     tree = (await client.get(f"/sites/{site_id}/options")).json()
-    assert [o["id"] for o in tree] == [root["id"], branch["id"]]  # a flat list; the tree is the parent links
+    assert [option["id"] for option in tree] == [root["id"], branch["id"]]  # a flat list; the tree is the parent links
     assert (await client.get(f"/options/{branch['id']}")).json() == branch  # derived on read, the same answer
+
+
+async def test_options_are_listed_per_site(client: AsyncClient):
+    rectangle, notched = await _site_id(client, "rectangle"), await _site_id(client, "notched")
+    mine = (await client.post(f"/sites/{rectangle}/options", json={"constraints": _MODEST})).json()
+    await client.post(f"/sites/{notched}/options", json={"constraints": _MODEST})
+    listed = (await client.get(f"/sites/{rectangle}/options")).json()
+    assert [option["id"] for option in listed] == [mine["id"]]
+
+
+async def test_a_site_name_is_unique(client: AsyncClient):
+    taken = await client.post("/sites", json={"name": " rectangle ", "polygon": _RECTANGLE})  # a template site's name
+    assert taken.status_code == 409 and "already exists" in taken.json()["detail"]
+    assert len((await client.get("/sites")).json()) == 3
 
 
 async def test_a_site_polygon_is_normalized_on_write(client: AsyncClient):
@@ -89,7 +114,8 @@ async def test_input_errors_are_422(client: AsyncClient):
     assert broken.status_code == 422 and "Self-intersection" in broken.json()["detail"]
 
     bad_value = await client.post(f"/sites/{site_id}/options", json={"constraints": {**_MODEST, "setback_m": -1}})
-    assert bad_value.status_code == 422 and "setback_m" in bad_value.json()["detail"]  # one string, like the others
+    assert bad_value.status_code == 422
+    assert bad_value.json()["detail"][0]["loc"][-1] == "setback_m"  # the standard list: the client maps messages by loc
 
     too_many = await client.post(f"/sites/{site_id}/options", json={"constraints": {**_MODEST, "max_floors": 10**12}})
     assert too_many.status_code == 422  # the integer column's range, declared rather than a 500
@@ -118,5 +144,6 @@ async def test_unknown_ids_are_404(client: AsyncClient):
     assert (await client.get(f"/sites/{missing}")).status_code == 404
     assert (await client.get(f"/sites/{missing}/options")).status_code == 404
     assert (await client.get(f"/options/{missing}")).status_code == 404
+    assert (await client.post(f"/sites/{missing}/options", json={"constraints": _MODEST})).status_code == 404
     preview = await client.post("/massing/preview", json={"site_id": str(missing), "constraints": _MODEST})
     assert preview.status_code == 404

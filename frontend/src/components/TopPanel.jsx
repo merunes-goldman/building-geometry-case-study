@@ -16,8 +16,8 @@ import { getHealth } from "../lib/api.js";
 import { errorHelperSx } from "../lib/ui.js";
 import OptionSelect from "./OptionSelect.jsx";
 
-export const TOP_PANEL_HEIGHT = 56; // 8 px padding + a small select + 8 px; the plan starts below it
 const HEALTH_INTERVAL_MS = 10_000;
+const HEALTH_COLOR = { healthy: "success", unreachable: "error" };
 
 // GET /health on mount and then periodically: "healthy" from the response, "unreachable" on any failure.
 function BackendHealth() {
@@ -31,13 +31,11 @@ function BackendHealth() {
     const timer = setInterval(check, HEALTH_INTERVAL_MS);
     return () => clearInterval(timer);
   }, []);
-  const color =
-    { healthy: "success", unreachable: "error" }[status] ?? "default";
   return (
     <Chip
       size="small"
       variant="outlined"
-      color={color}
+      color={HEALTH_COLOR[status] ?? "default"}
       label={`backend: ${status ?? "checking"}`}
     />
   );
@@ -45,8 +43,9 @@ function BackendHealth() {
 
 function CreateSiteDialog({ open, onClose, onCreate, saving }) {
   const [name, setName] = useState("");
-  const [text, setText] = useState("");
-  const [error, setError] = useState(null);
+  const [polygonText, setPolygonText] = useState("");
+  const [error, setError] = useState(null); // the failed request: a 409 belongs to the name, anything else to the polygon
+  const nameTaken = error?.status === 409;
 
   function close() {
     setError(null);
@@ -55,12 +54,12 @@ function CreateSiteDialog({ open, onClose, onCreate, saving }) {
 
   async function submit() {
     try {
-      await onCreate(name.trim(), JSON.parse(text));
+      await onCreate(name.trim(), JSON.parse(polygonText));
       setName("");
-      setText("");
+      setPolygonText("");
       close();
-    } catch (e) {
-      setError(e.message);
+    } catch (requestError) {
+      setError(requestError);
     }
   }
 
@@ -72,19 +71,30 @@ function CreateSiteDialog({ open, onClose, onCreate, saving }) {
           <TextField
             label="Name"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(event) => {
+              setName(event.target.value);
+              setError(null);
+            }}
             size="small"
-            slotProps={{ htmlInput: { maxLength: 30 } }}
+            error={nameTaken}
+            helperText={nameTaken ? error.message : undefined}
+            slotProps={{
+              htmlInput: { maxLength: 30 },
+              formHelperText: { sx: errorHelperSx },
+            }}
           />
           <TextField
             label="Polygon: [x, y] pairs in metres"
             placeholder="[[0, 0], [40, 0], [40, 25], [0, 25]]"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
+            value={polygonText}
+            onChange={(event) => {
+              setPolygonText(event.target.value);
+              setError(null);
+            }}
             multiline
             minRows={4}
-            error={Boolean(error)}
-            helperText={error}
+            error={Boolean(error) && !nameTaken}
+            helperText={error && !nameTaken ? error.message : undefined}
             slotProps={{ formHelperText: { sx: errorHelperSx } }}
           />
         </Stack>
@@ -94,7 +104,7 @@ function CreateSiteDialog({ open, onClose, onCreate, saving }) {
         <Button
           onClick={submit}
           variant="contained"
-          disabled={saving || !name.trim() || !text.trim()}
+          disabled={saving || !name.trim() || !polygonText.trim()}
         >
           Create
         </Button>
@@ -111,14 +121,20 @@ export default function TopPanel({
   saving,
   options,
   selected,
+  edited,
   onSelect,
   onNew,
 }) {
-  const [open, setOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
   return (
-    <Paper sx={{ position: "absolute", top: 8, left: 8, p: 1 }}>
-      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-        <Button variant="outlined" onClick={() => setOpen(true)}>
+    <Paper sx={{ p: 1, justifySelf: "start" }}>
+      <Stack
+        direction="row"
+        spacing={1}
+        useFlexGap
+        sx={{ flexWrap: "wrap", alignItems: "center" }}
+      >
+        <Button variant="outlined" onClick={() => setDialogOpen(true)}>
           Create site
         </Button>
         <FormControl size="small" sx={{ minWidth: 220 }}>
@@ -127,11 +143,12 @@ export default function TopPanel({
             labelId="site-label"
             label="Site"
             value={siteId ?? ""}
-            onChange={(e) => onSelectSite(e.target.value)}
+            onChange={(event) => onSelectSite(event.target.value)}
+            MenuProps={{ transitionDuration: 0 }}
           >
-            {sites.map((s) => (
-              <MenuItem key={s.id} value={s.id}>
-                {s.name}
+            {sites.map((site) => (
+              <MenuItem key={site.id} value={site.id}>
+                {site.name}
               </MenuItem>
             ))}
           </Select>
@@ -139,14 +156,15 @@ export default function TopPanel({
         <OptionSelect
           options={options}
           selected={selected}
+          edited={edited}
           onSelect={onSelect}
           onNew={onNew}
         />
         <BackendHealth />
       </Stack>
       <CreateSiteDialog
-        open={open}
-        onClose={() => setOpen(false)}
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
         onCreate={onCreateSite}
         saving={saving}
       />

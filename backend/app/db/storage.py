@@ -28,10 +28,12 @@ def _option(row: DictRow) -> Option:
 
 async def init(conn: AsyncConnection[DictRow], sites_dir: Path) -> None:
     """Create the tables if needed and seed the template sites into an empty database."""
+    if not sites_dir.is_dir():
+        raise FileNotFoundError(f"template sites folder not found: {sites_dir}")
     await conn.execute("SELECT pg_advisory_xact_lock(1)")  # several workers start at once; only one seeds
     await conn.execute(_SCHEMA)
-    cur = await conn.execute("SELECT count(*) AS n FROM sites")
-    if (row := await cur.fetchone()) and row["n"] == 0:
+    cursor = await conn.execute("SELECT count(*) AS n FROM sites")
+    if (row := await cursor.fetchone()) and row["n"] == 0:
         for path in sorted(sites_dir.glob("*.json")):
             data = json.loads(path.read_text())
             if "polygon" in data:  # the example constraints live in the same folder
@@ -41,19 +43,24 @@ async def init(conn: AsyncConnection[DictRow], sites_dir: Path) -> None:
 # --- sites --------------------------------------------------------------------------------------
 
 
-async def insert_site(conn: AsyncConnection[DictRow], name: str, polygon: Polygon) -> Site:
-    cur = await conn.execute("INSERT INTO sites (name, polygon) VALUES (%s, %s) RETURNING *", (name, Jsonb(polygon)))
-    return Site.model_validate((await cur.fetchall())[0])
+async def insert_site(conn: AsyncConnection[DictRow], name: str, polygon: Polygon) -> Site | None:
+    """None when the name is taken: site names are unique."""
+    cursor = await conn.execute(
+        "INSERT INTO sites (name, polygon) VALUES (%s, %s) ON CONFLICT (name) DO NOTHING RETURNING *",
+        (name, Jsonb(polygon)),
+    )
+    row = await cursor.fetchone()
+    return Site.model_validate(row) if row else None
 
 
 async def list_sites(conn: AsyncConnection[DictRow]) -> list[Site]:
-    cur = await conn.execute("SELECT * FROM sites ORDER BY created_at, name")
-    return [Site.model_validate(row) for row in await cur.fetchall()]
+    cursor = await conn.execute("SELECT * FROM sites ORDER BY created_at, name")
+    return [Site.model_validate(row) for row in await cursor.fetchall()]
 
 
 async def get_site(conn: AsyncConnection[DictRow], site_id: UUID) -> Site | None:
-    cur = await conn.execute("SELECT * FROM sites WHERE id = %s", (site_id,))
-    row = await cur.fetchone()
+    cursor = await conn.execute("SELECT * FROM sites WHERE id = %s", (site_id,))
+    row = await cursor.fetchone()
     return Site.model_validate(row) if row else None
 
 
@@ -61,8 +68,8 @@ async def get_site(conn: AsyncConnection[DictRow], site_id: UUID) -> Site | None
 
 
 async def insert_option(conn: AsyncConnection[DictRow], site: Site, body: OptionIn, result: MassingResult) -> Option:
-    c = body.constraints
-    cur = await conn.execute(
+    constraints = body.constraints
+    cursor = await conn.execute(
         """
         INSERT INTO options (site_id, parent_id, name, setback_m, floor_to_floor_m, max_height_m, max_floors,
                              site_coverage_ratio, gfa_target_m2, footprint, footprint_split)
@@ -73,34 +80,34 @@ async def insert_option(conn: AsyncConnection[DictRow], site: Site, body: Option
             site.id,
             body.parent_id,
             body.name,
-            c.setback_m,
-            c.floor_to_floor_m,
-            c.max_height_m,
-            c.max_floors,
-            c.site_coverage_ratio,
-            c.gfa_target_m2,
+            constraints.setback_m,
+            constraints.floor_to_floor_m,
+            constraints.max_height_m,
+            constraints.max_floors,
+            constraints.site_coverage_ratio,
+            constraints.gfa_target_m2,
             Jsonb(result.footprint) if result.footprint is not None else None,
             result.footprint_split,
         ),
     )
-    return _option({**(await cur.fetchall())[0], "site_polygon": site.polygon})
+    return _option({**(await cursor.fetchall())[0], "site_polygon": site.polygon})
 
 
 async def list_options(conn: AsyncConnection[DictRow], site: Site) -> list[Option]:
-    cur = await conn.execute("SELECT * FROM options WHERE site_id = %s ORDER BY created_at, id", (site.id,))
-    return [_option({**row, "site_polygon": site.polygon}) for row in await cur.fetchall()]
+    cursor = await conn.execute("SELECT * FROM options WHERE site_id = %s ORDER BY created_at, id", (site.id,))
+    return [_option({**row, "site_polygon": site.polygon}) for row in await cursor.fetchall()]
 
 
 async def get_option(conn: AsyncConnection[DictRow], option_id: UUID) -> Option | None:
-    cur = await conn.execute(
+    cursor = await conn.execute(
         "SELECT o.*, s.polygon AS site_polygon FROM options o JOIN sites s ON s.id = o.site_id WHERE o.id = %s",
         (option_id,),
     )
-    row = await cur.fetchone()
+    row = await cursor.fetchone()
     return _option(row) if row else None
 
 
 async def get_option_site(conn: AsyncConnection[DictRow], option_id: UUID) -> UUID | None:
-    cur = await conn.execute("SELECT site_id FROM options WHERE id = %s", (option_id,))
-    row = await cur.fetchone()
+    cursor = await conn.execute("SELECT site_id FROM options WHERE id = %s", (option_id,))
+    row = await cursor.fetchone()
     return row["site_id"] if row else None

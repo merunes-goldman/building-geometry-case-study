@@ -38,5 +38,8 @@ async def client(test_database: None) -> AsyncGenerator[AsyncClient, None]:
         conn.execute("DROP TABLE IF EXISTS options, sites")
     app = make_app()
     transport = ASGITransport(app=app)
-    async with app.router.lifespan_context(app), AsyncClient(transport=transport, base_url="http://test/api/v1") as c:
-        yield c
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=transport, base_url="http://test/api/v1") as client,
+    ):
+        yield client

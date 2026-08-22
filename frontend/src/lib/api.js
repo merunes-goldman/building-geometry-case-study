@@ -1,18 +1,10 @@
 // Fetch client for the API of docs/DESIGN.md, "API contract". Override the base with VITE_API_BASE.
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
-// An HTTP error from the API: the message is the `detail` string of the response.
-export class ApiError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
-
 async function request(path, body) {
-  let res;
+  let response;
   try {
-    res = await fetch(`${API_BASE}/api/v1${path}`, {
+    response = await fetch(`${API_BASE}/api/v1${path}`, {
       method: body ? "POST" : "GET",
       headers: body ? { "content-type": "application/json" } : undefined,
       body: body ? JSON.stringify(body) : undefined,
@@ -20,11 +12,18 @@ async function request(path, body) {
   } catch {
     throw new Error("The backend is unreachable.");
   }
-  if (!res.ok) {
-    const detail = (await res.json().catch(() => ({}))).detail;
-    throw new ApiError(res.status, detail ?? `${res.status} ${res.statusText}`);
+  if (!response.ok) {
+    // Every error body is { detail }: a string from the API's own checks, FastAPI's list of { loc, msg } for request validation.
+    const detail = (await response.json().catch(() => ({}))).detail;
+    const message = Array.isArray(detail)
+      ? detail.map((item) => item.msg).join("; ")
+      : detail;
+    throw Object.assign(
+      new Error(message ?? `${response.status} ${response.statusText}`),
+      { status: response.status, detail },
+    );
   }
-  return res.json();
+  return response.json();
 }
 
 export const getHealth = () => request("/health");

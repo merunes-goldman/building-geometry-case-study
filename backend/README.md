@@ -23,7 +23,7 @@ uv run app serve --reload        # http://localhost:8000  (docs at /docs)
 A Postgres is expected at `APP_DATABASE_URL`. The easiest way is the root
 `docker compose up` (brings up db + backend + frontend together).
 
-## What's here / what's yours
+## What's here
 
 - `app/server.py` — FastAPI app, CORS, lifespan: opens the pool, applies the schema, seeds the template sites.
 - `app/db/` — `pool.py` (async psycopg pool + the `Connection` dependency), `schema.sql` (the two tables,
