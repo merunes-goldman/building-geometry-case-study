@@ -316,6 +316,8 @@ The choice: **SVG rendered by React**, no libraries. Libraries become appropriat
 
 The panels around the scene are ordinary UI, and there a component library is appropriate: **MUI** (form fields, lists, buttons, dialogs, banners). The choice is mostly taste: the needed set of components is small and any mainstream kit covers it (Ant Design, Chakra, Mantine — or the stock browser controls, which take longer to make look decent). The deciding argument is familiarity: I have used it before and I like how it looks; the time is better spent on the core of the task than on learning a new library.
 
+The frontend stays in plain JavaScript, as the scaffold came. It has no domain logic of its own: the constraints, the result and the error shapes are declared once, on the API's pydantic models, and the client only renders what it receives — TypeScript would restate those shapes by hand. When the client gets logic of its own (comparing any two options — roadmap), the types come with it, generated from the OpenAPI schema the backend already emits (`app generate-openapi`).
+
 ### The screen
 
 The plan fills the area the panels leave free; the panels are fixed. The interface is made for desktop windows: the page is never narrower than 880 px (below that it scrolls sideways), and in a narrow window the top panel wraps its controls instead of running under the inspector.
