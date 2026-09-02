@@ -2,8 +2,8 @@ import Box from "@mui/material/Box";
 import LinearProgress from "@mui/material/LinearProgress";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Inspector from "./components/Inspector.jsx";
-import Plan from "./components/Plan.jsx";
 import TopPanel from "./components/TopPanel.jsx";
+import Viewport from "./components/Viewport.jsx";
 import {
   createOption,
   createSite,
@@ -224,10 +224,10 @@ export default function App() {
           onSelect={selectOption}
           onNew={reset}
         />
-        <Plan
+        <Viewport
           site={site}
-          buildings={result?.buildings}
-          parentBuildings={showParent ? parent?.result.buildings : null}
+          result={result}
+          parentResult={showParent ? (parent?.result ?? null) : null}
           recomputing={pendingPreviews > 0 && edited}
         />
         <Inspector

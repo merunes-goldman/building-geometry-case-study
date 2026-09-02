@@ -1,6 +1,6 @@
 # Frontend — building geometry case study
 
-Vite + React (plain JS) with MUI for the panels and plain SVG for the plan; the design is in
+Vite + React (plain JS) with MUI for the panels, plain SVG for the plan and three.js for the 3D view; the design is in
 `docs/DESIGN.md`, "Visualization".
 
 ## Getting started
@@ -22,9 +22,11 @@ The backend base URL defaults to `http://localhost:8000`; override with
 - `src/components/OptionSelect.jsx` — the option list as a dropdown: "New option" first, then the tree indented by depth;
   while the form is edited it names the draft, "New option from X".
 - `src/components/Inspector.jsx` — the constraint form, metrics, verdict, parent comparison, "Add option" and "Reset option".
+- `src/components/Viewport.jsx` — the plan or the 3D view of the same result, the 2D/3D switch, the "recomputing" mark.
 - `src/components/Plan.jsx` — the top-down plan in SVG: site polygon, the buildings' footprints, the parent's dashed.
+- `src/components/Volume.jsx` — the 3D view in three.js (loaded on the first switch): the site flat, the buildings as prisms with their floors marked, the parent's as outlines; drag to orbit, wheel to zoom.
 - `src/lib/api.js` — fetch client for the API (`docs/DESIGN.md`, "API contract").
-- `src/lib/ui.js` — shared bits: verdict colours and labels, number formatting, the error helper style.
+- `src/lib/ui.js` — shared bits: verdict colours and labels, the colours of the plan and the 3D view, number formatting, the error helper style.
 
 Lint: `npm run lint` (biome; `npx biome check --write src` to format).
 

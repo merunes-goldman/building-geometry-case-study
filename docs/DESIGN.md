@@ -6,7 +6,7 @@
 
 **Solution.** A specialized tool that makes an experiment instant and keeps it from getting lost: from the site polygon and the constraints it computes the rough buildable volume — the massing — with its metrics, and stores every experiment in the option tree (save, branch, compare). A single computation is simple (shrinking the polygon plus arithmetic); the real value is in the exploration, so the focus is the option tree and the live preview, not the computation itself.
 
-Three parts: the computation core (a pure function), storage with the option tree (Postgres, plain SQL), and the interactive visualization (React + SVG).
+Three parts: the computation core (a pure function), storage with the option tree (Postgres, plain SQL), and the interactive visualization (React + SVG, three.js for the 3D view).
 
 **The prototype.**
 
@@ -25,6 +25,7 @@ In scope:
 - flat site, no terrain
 - template sites to choose from + creating a site by pasting coordinates as text
 - live preview of the current experiment
+- the 3D view: the same result as volumes, a switch on the plan
 
 Out of scope — all in the roadmap:
 
@@ -34,7 +35,6 @@ Out of scope — all in the roadmap:
 - a building with a shape of its own (e.g. a rectangle fitted inside the footprint) — the prototype building always occupies its whole part of the footprint; rules between buildings, such as a minimum distance between them
 - underground floors (basements) — they live by different rules: setbacks and height limits can apply to the above-ground part only, basement area may be excluded from GFA, and the underground footprint can be wider than the building above
 - GFA target auto-fit
-- 3D view
 - branch archiving and option renaming (see "Tree rules")
 - algorithm versioning (a stored option remembers which version of the computation produced it)
 - scale: dedicated SQL columns for the metrics, paged trees, worker processes for the computation
@@ -323,7 +323,7 @@ The scene is tiny: two polygons with a dozen vertices each. With the backend it 
 | d3 | utilities for scales, axes, zoom | manages the page itself — coexists poorly with React; built for charts, not plans |
 | three.js (WebGL, 3D) | true volume: floors visible as a stack | camera, lighting, mouse picking — a separate layer of work; adds no new data — the building is the footprint stretched upwards, so the plan plus the floor count carries everything |
 
-The choice: **SVG rendered by React**, no libraries. Libraries become appropriate later, and that is in the roadmap: drawing the site with the mouse is exactly a task for Konva or Fabric, the 3D view — for three.js.
+The choice for the plan: **SVG rendered by React**, no libraries. Libraries become appropriate where the scene grows: drawing the site with the mouse is a task for Konva or Fabric (roadmap); the 3D view is three.js — see "The 3D view" below.
 
 The panels around the scene are ordinary UI, and there a component library is appropriate: **MUI** (form fields, lists, buttons, dialogs, banners). The choice is mostly taste: the needed set of components is small and any mainstream kit covers it (Ant Design, Chakra, Mantine — or the stock browser controls, which take longer to make look decent). The deciding argument is familiarity: I have used it before and I like how it looks; the time is better spent on the core of the task than on learning a new library.
 
@@ -343,10 +343,11 @@ The plan fills the area the panels leave free; the panels are fixed. The interfa
 |   plan (full screen):               | form, metrics,   | |
 |   site polygon + footprint          | button, verdict  | |
 |                                     +------------------+ |
+|                             [2D 3D]                      |
 +----------------------------------------------------------+
 ```
 
-- **The plan (full screen).** Top-down view: the site polygon and the buildings' footprints. Redrawn on every recomputation; fitted into the area free of panels.
+- **The plan (full screen).** Top-down view: the site polygon and the buildings' footprints. Redrawn on every recomputation; fitted into the area free of panels. The switch to the 3D view is at the bottom right of the area (see "The 3D view").
 - **The top panel.** The "Create site" button — a dialog with a name and coordinates pasted as text (an array of [x, y] pairs) — then site selection and the option list. The option list is a dropdown: "New option" first, then all options of the site in a single list, nesting shown by indents, roots as top-level rows; a row carries the name, GFA, floor count, the building count when there is more than one, and a verdict mark, so a rough comparison is readable straight from the list. The closed dropdown names what the form shows: the selected option or, once the form is edited, the draft — "New option from X" — with X's row still marked. At the end, a backend health mark (GET /health, polled), so an unreachable backend is visible before the first failed request. The template sites are pre-seeded (see "Database schema") and the rectangle opens first; drawing the site with the mouse — roadmap.
 - **The inspector (right).** The selected option, top to bottom: the constraint fields, the metrics, the controls — the "Compare to parent" toggle, the "Add option" and "Reset option" buttons — and the verdict last, so a verdict that changes its size moves nothing above it. Next to "Add option" a note explains what the new option will become: a child of the selected one or a new root. "Compare to parent" — the parent of what the form shows (see Behaviour) — fills the parent column of the metrics table (the column is always there, so the layout does not jump; its header is the parent's name, empty while the comparison is off) as "parent value -> current value", the differing rows tinted, the parent's value with the same arrow at the start of each changed field, and its footprints dashed on the plan (details in Behaviour).
 
@@ -355,7 +356,7 @@ The plan fills the area the panels leave free; the panels are fixed. The interfa
 1. The user picks a site and enters constraints; the preview recomputes on every change (POST /massing/preview, with a short delay after typing). Switching the site clears the selection, resets the form and recomputes the plan without waiting for an edit — the old site's buildings do not stay on the plan. A reset returns the form to valid defaults, so the immediate recomputation always has a computable set of constraints.
 2. "Add option" saves the computation — as a child of the option selected in the list or, when nothing is selected, as a new root (the start of a new tree). The selection moves to the new option: the next edit branches from it.
 3. Clicking an option shows its snapshot from the database (the footprints, the metrics) and fills the form with its constraints; the preview turns on with the first manual edit — programmatic filling does not trigger a recomputation. From the first edit the list names the draft, "New option from X", with X's row still marked; "Reset option" — or clicking that row again — discards the draft and restores the snapshot (with nothing selected, "Reset option" returns the form to the defaults). "New option" in the list resets the form the same way — there is no snapshot left to protect; the previous result stays on screen until the preview of the defaults replaces it, so nothing flashes blank.
-4. Comparison with the parent: the "Compare to parent" toggle is there whenever what the form shows has a parent — a selected non-root option, or an edited form, whose parent is the selected option (the draft branches from it, so it is compared with that option, not with that option's parent); the toggle keeps its state across selections and "Reset option", and is disabled where there is no parent — the parent's footprints are drawn dashed over the plan, its metrics fill the parent column in the inspector, and the changed constraints and differing metrics are highlighted; when nothing differs, a warning says so — an empty comparison must not look like a broken one.
+4. Comparison with the parent: the "Compare to parent" toggle is there whenever what the form shows has a parent — a selected non-root option, or an edited form, whose parent is the selected option (the draft branches from it, so it is compared with that option, not with that option's parent); the toggle keeps its state across selections and "Reset option", and is disabled where there is no parent — the parent's footprints are drawn dashed over the plan (as outlines in the 3D view), its metrics fill the parent column in the inspector, and the changed constraints and differing metrics are highlighted; when nothing differs, a warning says so — an empty comparison must not look like a broken one.
 5. The verdict on screen: **feasible** — the normal view; **GFA target missed** — an orange (warning) banner with the shortfall; **infeasible** — a red banner with the reason. The footprints leave the plan only when the footprint is destroyed; with zero floors the footprint exists, is stored and is shown. When the footprint split, a note next to the verdict lists the parts with their areas: a building stands on each.
 6. Buttons that create data ("Add option", site creation) are disabled for the duration of the request; the loading is shown by a single shared indicator: frantic clicking creates no duplicates and breaks nothing. The preview does not lock the fields — that would kill the live recomputation; instead the plan gets a "recomputing" indicator, the requests are numbered, and a response with a stale number is dropped; no request cancellation is needed.
 7. Request errors: a 422 — from the preview or from a save — keeps the last valid footprints on the plan and shows the reason under the offending field (a message without a field goes under the form); any other failure shows a banner with the text — in the inspector, or under the polygon field in the "Create site" dialog — and the buttons unlock.
@@ -364,6 +365,22 @@ The plan fills the area the panels leave free; the panels are fixed. The interfa
 
 - Coordinates are in metres with the Y axis pointing up; in SVG the Y axis grows downwards, so the drawing flips it.
 - The site is fitted into the area free of panels automatically (the viewBox follows the polygon's bounding box); no pan and zoom.
+
+### The 3D view
+
+The same result as volumes: the site flat on the ground in the plan's grey; every building a translucent prism in the plan's blue — the footprint extruded by the height, with the footprint ring drawn at every floor level, so the floors read as a stack; the parent's buildings, when the comparison is on, as outlines in the plan's purple. The switch between the plan and the 3D view sits at the bottom right of the same area; the "recomputing" mark stays at the bottom left in both. The live preview is the same: the objects are rebuilt from every new result. With zero floors a building is drawn flat, as on the plan.
+
+The camera: drag to orbit, wheel to zoom, right-drag to pan, never from below the ground. It is fitted to the site when the view opens and when the site changes — not on every recomputation, so the picture does not jump while typing. A tall tower can leave the frame; zooming out is the user's move (fitting to the building height too — roadmap, with pan and zoom on the plan).
+
+Considered ways to wire three.js into React:
+
+| Way | Pros | Cons |
+|---|---|---|
+| **three.js directly** | one dependency; no coupling to the React version; the scene is a dozen objects, cleared and rebuilt on every change in a few lines | the renderer, the camera fit, the resize and the disposal are written by hand — one effect each |
+| react-three-fiber | the scene as React components, redrawn and disposed by React, as the plan is | two more libraries (fiber, drei for the camera controls), each pinned to a React major: fiber 8 for React 18, fiber 9 for React 19 |
+| Babylon.js | a complete engine with its own camera and scene tools | a second engine of the same kind; nothing here needs more than three.js gives |
+
+The choice: **three.js directly**. The library is loaded on the first switch to 3D, not with the page: the plan is the default view, and a session may never open the 3D one.
 
 ## Assumptions & trade-offs
 
@@ -383,7 +400,7 @@ The plan fills the area the panels leave free; the panels are fixed. The interfa
 
 **Interface:**
 
-- Top-down view instead of 3D: with identical floors the volume carries no new data and is expensive. The 3D view — roadmap.
+- The plan is the default view and the 3D view is a switch: with identical floors the volume carries no new data, and its library loads only when asked for. The 3D camera is fitted to the site, not to the building: a tall tower can leave the frame until the user zooms out.
 - Option comparison is the metrics in the list rows and the parent overlay on the plan; comparing any two options — roadmap.
 - A changed constraint is detected by text, not by number: "5.0" typed into a field counts as a change from the parent's 5, though the result is the same. A numeric comparison would have to make sense of half-typed input; the metrics table next to the fields shows the real difference anyway.
 - The site is always fitted whole into the area free of panels; pan and zoom — roadmap.
@@ -418,17 +435,16 @@ The plan fills the area the panels leave free; the panels are fixed. The interfa
 
 The order follows the value-to-cost ratio and the dependencies.
 
-1. **Comparing any two options.** Picking two in the list, overlaid footprints on the plan, a table of constraint and metric differences — a generalization of the prototype's parent comparison. The data is already in the database, the work is entirely on the frontend. The small interface debts go here too: zoom and pan, panel hiding.
+1. **Comparing any two options.** Picking two in the list, overlaid footprints on the plan, a table of constraint and metric differences — a generalization of the prototype's parent comparison. The data is already in the database, the work is entirely on the frontend. The small interface debts go here too: zoom and pan, panel hiding, the 3D camera fitted to the building height as well as the site.
 2. **Drawing the site with the mouse.** Direct editing of vertices on the plan; in the prototype the polygon is entered only as text.
 3. **Real-world zoning.** The new constraint kinds and realistic value ranges from "Out of scope", with the numbers from domain experts and regulations. Constraints stop being five numbers: they move to jsonb and a schema version appears; the inset with its own distance per side is the biggest jump in core complexity.
 4. **Algorithm versioning and branch archiving.** Both come from real use: the algorithm changes — an option keeps the version of the computation that produced it; trees grow — dead-end branches get hidden without being erased. Option renaming goes here too: in the prototype the name is frozen together with the other fields — and with renaming, unique option names: one namespace per site for the given names, unnamed options stay free; not per subtree — the interface refers to an option by name without the tree context, so the namespace is the site.
-5. **The 3D view.** Floors stacked in three.js: the footprint stretched upwards by the floor count. The data is already there (the footprint, the floor count, the floor-to-floor height); the value is clarity.
-6. **GFA target auto-fit.** The target is optional and reachable by different combinations of constraints, so this is a search over the allowed ranges with suggestions on how to cover the shortfall: one floor higher or a wider footprint — unlike the additional inset (Algorithm, step 3), which has a single answer. It needs a stable core, so it comes after the core churn of real-world zoning.
-7. **Buildings with a shape of their own.** A building not equal to its part of the footprint — a rectangle fitted inside, a tower on a podium — and rules between buildings, starting with a minimum distance. This changes the model: a building gets input of its own, and the buildings move from the jsonb list in the option row to a table of their own with typed columns (see "Database schema", "Storing the buildings").
-8. **Underground floors.** Basements live by their own rules (listed in "Out of scope") — up to an underground footprint wider than the building above: parking under the whole site. A separate extension of the floor model.
-9. **Scale.** Dedicated metric columns for SQL search and sorting, paged tree loading — as the number of users and the size of trees grow. The computation is pure CPU: moving it to separate processes (a worker pool or a task queue via a message broker) keeps it from blocking the event loop of the API server (see "API contract").
-10. **Exporting the result.** To other tools where the architect continues the work, and to a report for the client — for now the result lives only in this interface.
-11. **A site polygon with holes.** No-build zones inside the site: the polygon stops being a single ring. Shapely's inset accepts a polygon with interior rings; validation, the wire format and the interface change.
-12. **Terrain.** Sloped sites change both the computation and the drawing; the "measured from where" question is in "Out of scope".
-13. **Geo-referencing.** Import from cadastre or GeoJSON: the site gets real map coordinates.
-14. **Accounts and collaboration.** The model has no user entity (see "Assumptions & trade-offs"); accounts pull in permissions on sites and trees.
+5. **GFA target auto-fit.** The target is optional and reachable by different combinations of constraints, so this is a search over the allowed ranges with suggestions on how to cover the shortfall: one floor higher or a wider footprint — unlike the additional inset (Algorithm, step 3), which has a single answer. It needs a stable core, so it comes after the core churn of real-world zoning.
+6. **Buildings with a shape of their own.** A building not equal to its part of the footprint — a rectangle fitted inside, a tower on a podium — and rules between buildings, starting with a minimum distance. This changes the model: a building gets input of its own, and the buildings move from the jsonb list in the option row to a table of their own with typed columns (see "Database schema", "Storing the buildings").
+7. **Underground floors.** Basements live by their own rules (listed in "Out of scope") — up to an underground footprint wider than the building above: parking under the whole site. A separate extension of the floor model.
+8. **Scale.** Dedicated metric columns for SQL search and sorting, paged tree loading — as the number of users and the size of trees grow. The computation is pure CPU: moving it to separate processes (a worker pool or a task queue via a message broker) keeps it from blocking the event loop of the API server (see "API contract").
+9. **Exporting the result.** To other tools where the architect continues the work, and to a report for the client — for now the result lives only in this interface.
+10. **A site polygon with holes.** No-build zones inside the site: the polygon stops being a single ring. Shapely's inset accepts a polygon with interior rings; validation, the wire format and the interface change.
+11. **Terrain.** Sloped sites change both the computation and the drawing; the "measured from where" question is in "Out of scope".
+12. **Geo-referencing.** Import from cadastre or GeoJSON: the site gets real map coordinates.
+13. **Accounts and collaboration.** The model has no user entity (see "Assumptions & trade-offs"); accounts pull in permissions on sites and trees.
