@@ -18,8 +18,7 @@ CREATE TABLE IF NOT EXISTS options (
     max_floors integer CHECK (max_floors >= 0),
     site_coverage_ratio double precision CHECK (site_coverage_ratio > 0 AND site_coverage_ratio <= 1),
     gfa_target_m2 double precision CHECK (gfa_target_m2 > 0),
-    footprint jsonb,
-    footprint_split boolean NOT NULL,
+    footprints jsonb NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     CHECK (max_height_m IS NOT NULL OR max_floors IS NOT NULL)
 );

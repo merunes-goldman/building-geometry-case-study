@@ -22,7 +22,7 @@ The backend base URL defaults to `http://localhost:8000`; override with
 - `src/components/OptionSelect.jsx` — the option list as a dropdown: "New option" first, then the tree indented by depth;
   while the form is edited it names the draft, "New option from X".
 - `src/components/Inspector.jsx` — the constraint form, metrics, verdict, parent comparison, "Add option" and "Reset option".
-- `src/components/Plan.jsx` — the top-down plan in SVG: site polygon, footprint, the parent's footprint dashed.
+- `src/components/Plan.jsx` — the top-down plan in SVG: site polygon, the buildings' footprints, the parent's dashed.
 - `src/lib/api.js` — fetch client for the API (`docs/DESIGN.md`, "API contract").
 - `src/lib/ui.js` — shared bits: verdict colours and labels, number formatting, the error helper style.
 

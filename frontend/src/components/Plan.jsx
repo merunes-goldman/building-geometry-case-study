@@ -4,13 +4,13 @@ import Chip from "@mui/material/Chip";
 const PADDING_RATIO = 0.05; // free space around the site, as a share of its longer side
 
 // Top-down view in metres, Y up. The points are negated on Y because SVG grows downwards.
-// Colours: MUI primary for the footprint, MUI secondary (#9c27b0) for the parent — the same tint the inspector uses for differences.
+// Colours: MUI primary for the buildings, MUI secondary (#9c27b0) for the parent's — the same tint the inspector uses for differences.
 const svgPoints = (polygon) => polygon.map(([x, y]) => `${x},${-y}`).join(" ");
 
 export default function Plan({
   site,
-  footprint,
-  parentFootprint,
+  buildings,
+  parentBuildings,
   recomputing,
 }) {
   if (!site) {
@@ -39,24 +39,26 @@ export default function Plan({
           stroke="#757575"
           vectorEffect="non-scaling-stroke"
         />
-        {parentFootprint && (
+        {parentBuildings?.map(({ footprint }) => (
           <polygon
-            points={svgPoints(parentFootprint)}
+            key={svgPoints(footprint)}
+            points={svgPoints(footprint)}
             fill="none"
             stroke="#9c27b0"
             strokeDasharray="6 4"
             vectorEffect="non-scaling-stroke"
           />
-        )}
-        {footprint && (
+        ))}
+        {buildings?.map(({ footprint }) => (
           <polygon
+            key={svgPoints(footprint)}
             points={svgPoints(footprint)}
             fill="#1976d2"
             fillOpacity={0.35}
             stroke="#1976d2"
             vectorEffect="non-scaling-stroke"
           />
-        )}
+        ))}
       </svg>
       {recomputing && (
         <Chip

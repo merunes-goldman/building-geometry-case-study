@@ -46,6 +46,7 @@ const FIELDS = [
 ];
 
 const METRICS = [
+  { key: "building_count", label: "Buildings", digits: 0 },
   { key: "footprint_area_m2", label: "Footprint area, m2", digits: 1 },
   { key: "floor_count", label: "Floors", digits: 0 },
   { key: "height_m", label: "Height, m", digits: 1 },
@@ -93,6 +94,11 @@ function verdictText({ verdict, gfa_shortfall_m2, reason }) {
   }
   return `Infeasible: ${REASON_TEXT[reason]}`;
 }
+
+const splitText = (buildings) =>
+  `The footprint split: a building on each of the ${buildings.length} parts, ${buildings
+    .map((building) => formatNumber(building.footprint_area_m2, 1))
+    .join(", ")} m2.`;
 
 function MetricsTable({ metrics, parent }) {
   const parentMetrics = parent?.result.metrics;
@@ -256,11 +262,8 @@ export default function Inspector({
             {verdictText(result)}
           </Alert>
         )}
-        {result?.footprint_split && result.footprint && (
-          <Alert severity="info">
-            The footprint split: the building stands on the kept part, the rest
-            was dropped.
-          </Alert>
+        {result && result.buildings.length > 1 && (
+          <Alert severity="info">{splitText(result.buildings)}</Alert>
         )}
         {identical && (
           <Alert severity="warning">

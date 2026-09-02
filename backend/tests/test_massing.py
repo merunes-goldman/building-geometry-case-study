@@ -39,9 +39,10 @@ def _floors(constraints: Constraints) -> int:
 def test_rectangle_modest_set():
     # 40x25 site, 3 m setback: a 34x19 = 646 sq. m footprint; 60% coverage allows 600 sq. m.
     result = compute_massing(_site("rectangle"), _example("modest"))
-    assert result.footprint is not None and not result.footprint_split
+    assert result.metrics.building_count == 1
     area = result.metrics.footprint_area_m2
     assert 600 - 0.2 <= area <= 600  # "not above the limit", reached from below in millimetre steps
+    assert result.buildings[0].footprint_area_m2 == area
     assert result.metrics.floor_count == 6  # min(6, floor(24 / 3.5) = 6)
     assert result.metrics.height_m == pytest.approx(21)
     assert result.metrics.gfa_m2 == pytest.approx(area * 6)
@@ -51,9 +52,9 @@ def test_rectangle_modest_set():
 
 def test_rectangle_without_coverage_is_exact():
     result = compute_massing(_site("rectangle"), _example("modest", site_coverage_ratio=None))
-    assert result.footprint is not None
-    assert result.metrics.footprint_area_m2 == pytest.approx(646)
-    assert result.footprint == [(3, 3), (37, 3), (37, 22), (3, 22)]  # the example in DESIGN.md, "API contract"
+    (building,) = result.buildings
+    assert building.footprint_area_m2 == pytest.approx(646)
+    assert building.footprint == [(3, 3), (37, 3), (37, 22), (3, 22)]  # the example in DESIGN.md, "API contract"
     assert result.metrics.gfa_m2 == pytest.approx(3876)
     assert result.metrics.far == pytest.approx(3.876)
 
@@ -61,44 +62,53 @@ def test_rectangle_without_coverage_is_exact():
 def test_l_shaped_inset_keeps_the_reflex_corner_sharp():
     # Arms after a 3 m setback: 34x9 + 14x15 = 516 sq. m; a sharp inner corner keeps six vertices.
     result = compute_massing(_site("l-shaped"), _example("modest", site_coverage_ratio=None))
-    assert result.footprint is not None and not result.footprint_split
+    (building,) = result.buildings
     assert result.metrics.footprint_area_m2 == pytest.approx(516)
-    assert len(result.footprint) == 6
+    assert len(building.footprint) == 6
 
 
-def test_notched_moderate_setback_splits_and_keeps_the_leftmost_part():
-    # A 4 m setback eats the 6 m neck; the two 12x12 parts tie, so the leftmost one is kept.
+def test_notched_moderate_setback_gives_a_building_on_each_part():
+    # A 4 m setback eats the 6 m neck: two 12x12 parts, a building on each, the left one first.
     result = compute_massing(_site("notched"), _example("modest", setback_m=4, site_coverage_ratio=None))
-    assert result.footprint is not None and result.footprint_split
-    assert result.metrics.footprint_area_m2 == pytest.approx(144)
-    assert _bounds(result.footprint) == (4, 4, 16, 16)
+    assert [_bounds(building.footprint) for building in result.buildings] == [(4, 4, 16, 16), (34, 4, 46, 16)]
+    assert result.metrics.building_count == 2
+    assert result.metrics.footprint_area_m2 == pytest.approx(288)
+    assert result.metrics.gfa_m2 == pytest.approx(288 * 6)
     assert result.verdict == "ok"
 
 
-def test_split_keeps_the_largest_part():
-    # The notched site cannot tell the largest part from the leftmost one; an asymmetric site can.
+def test_buildings_are_ordered_by_position_not_by_size():
+    # An asymmetric site: the small left part comes first.
     polygon: Polygon = [(0, 0), (60, 0), (60, 20), (30, 20), (30, 6), (20, 6), (20, 20), (0, 20)]
     result = compute_massing(polygon, _example("modest", setback_m=4, site_coverage_ratio=None))
-    assert result.footprint is not None and result.footprint_split
-    assert result.metrics.footprint_area_m2 == pytest.approx(22 * 12)
-    assert _bounds(result.footprint) == (34, 4, 56, 16)
+    assert [building.footprint_area_m2 for building in result.buildings] == pytest.approx([12 * 12, 22 * 12])
+    assert [_bounds(building.footprint) for building in result.buildings] == [(4, 4, 16, 16), (34, 4, 56, 16)]
+
+
+def test_buildings_with_the_same_left_edge_are_ordered_lowest_first():
+    # A C-shaped site: two 10 m arms joined by a 6 m spine; a 4 m setback eats the spine and leaves two 12x2 strips.
+    polygon: Polygon = [(0, 0), (20, 0), (20, 10), (6, 10), (6, 14), (20, 14), (20, 24), (0, 24)]
+    result = compute_massing(polygon, _example("modest", setback_m=4, site_coverage_ratio=None))
+    assert [_bounds(building.footprint) for building in result.buildings] == [(4, 4, 16, 6), (4, 18, 16, 20)]
 
 
 def test_coverage_inset_can_split_the_footprint_too():
-    # The 0.5 m setback keeps the 1.5 m neck; the extra inset for 60% coverage (498 of 830 sq. m) cuts it.
+    # The 0.5 m setback keeps the 1.5 m neck; the extra inset for 60% coverage (498 of 830 sq. m) cuts it:
+    # two equal buildings whose total is just under the limit.
     polygon: Polygon = [(0, 0), (60, 0), (60, 20), (40, 20), (40, 1.5), (20, 1.5), (20, 20), (0, 20)]
     result = compute_massing(
         polygon, Constraints(setback_m=0.5, floor_to_floor_m=3, max_floors=3, site_coverage_ratio=0.6)
     )
-    assert result.footprint_split
+    assert result.metrics.building_count == 2
     area = result.metrics.footprint_area_m2
-    assert 342.25 - 0.1 <= area <= 342.25  # the area jumps to the 18.5x18.5 left part, well under the limit
+    assert 498 - 0.2 <= area <= 498
+    assert [building.footprint_area_m2 for building in result.buildings] == pytest.approx([area / 2, area / 2])
 
 
 def test_twelve_metre_setback_depends_on_the_site():
     notched = compute_massing(_site("notched"), _example("infeasible"))
     assert notched.verdict == "infeasible" and notched.reason == "footprint_collapsed"
-    assert notched.footprint is None and notched.metrics.gfa_m2 == 0
+    assert notched.buildings == [] and notched.metrics.gfa_m2 == 0
 
     rectangle = compute_massing(_site("rectangle"), _example("infeasible"))
     assert rectangle.verdict == "ok"
@@ -111,19 +121,19 @@ def test_coverage_limit_below_the_sliver_threshold_destroys_the_footprint():
     assert result.verdict == "infeasible" and result.reason == "footprint_collapsed"
 
 
-def test_slivers_are_removed_before_the_split_analysis():
+def test_slivers_are_not_buildings():
     # A 20x20 body, a 1.5 m wide neck and a 2.5x2.5 m knob: a 1 m inset leaves the body and a 0.25 sq. m sliver.
     polygon: Polygon = [(0, 0), (20, 0), (20, 9.25), (22, 9.25), (22, 8.75), (24.5, 8.75), (24.5, 11.25)]
     polygon += [(22, 11.25), (22, 10.75), (20, 10.75), (20, 20), (0, 20)]
     result = compute_massing(polygon, Constraints(setback_m=1, floor_to_floor_m=3, max_floors=3))
-    assert not result.footprint_split  # the sliver is not a part, so there is no false split
+    assert result.metrics.building_count == 1  # the sliver is not a building
     assert result.metrics.footprint_area_m2 == pytest.approx(324)
 
 
 def test_no_floor_fits():
     result = compute_massing(_site("rectangle"), _example("modest", max_height_m=3))
     assert result.verdict == "infeasible" and result.reason == "zero_floors"
-    assert result.footprint is not None  # the footprint exists and is kept
+    assert result.buildings  # the footprint exists and is kept
 
 
 def test_gfa_target_above_the_reachable_maximum():

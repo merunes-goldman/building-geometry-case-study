@@ -1,4 +1,4 @@
-"""Massing: site polygon + constraints -> buildable footprint, metrics, verdict.
+"""Massing: site polygon + constraints -> buildings (one footprint each), metrics, verdict.
 
 Pure functions, no IO. The steps and their rationale are in docs/DESIGN.md, "Algorithm".
 """
@@ -7,8 +7,8 @@ import math
 from typing import Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
+from shapely import MultiPolygon, get_parts
 from shapely import Polygon as ShapelyPolygon
-from shapely import get_parts
 from shapely.geometry.polygon import orient
 from shapely.validation import explain_validity
 
@@ -19,7 +19,6 @@ Verdict = Literal["ok", "gfa_missed", "infeasible"]
 Reason = Literal["footprint_collapsed", "zero_floors"]
 
 _SLIVER_M2 = 1.0  # a piece below this area is rounding debris, not a footprint
-_AREA_TOLERANCE_M2 = 1e-6  # one square millimetre: part areas closer than this tie
 _INSET_PRECISION_M = 1e-3  # binary search step for the coverage inset
 _INSET_SEARCH_STEPS = 64  # halvings: millimetres from any real size, and a hard stop where floats cannot halve further
 _FLOOR_DIVISION_EPS = 1e-9  # 9.6 / 3.2 is 2.999... in floating point and must still give 3 floors
@@ -46,8 +45,14 @@ class Constraints(BaseModel):
         return self
 
 
-class Metrics(BaseModel):
+class Building(BaseModel):
+    footprint: Polygon
     footprint_area_m2: float
+
+
+class Metrics(BaseModel):
+    building_count: int
+    footprint_area_m2: float  # all buildings together
     floor_count: int
     height_m: float
     gfa_m2: float
@@ -56,8 +61,7 @@ class Metrics(BaseModel):
 
 
 class MassingResult(BaseModel):
-    footprint: Polygon | None  # None when nothing is left of the footprint
-    footprint_split: bool
+    buildings: list[Building]  # leftmost first, then lowest; empty when nothing is left of the footprint
     metrics: Metrics
     verdict: Verdict
     gfa_shortfall_m2: float | None = None  # set for gfa_missed
@@ -86,44 +90,39 @@ def _to_polygon(shape: ShapelyPolygon) -> Polygon:
     return [(x, y) for x, y in orient(shape).exterior.coords[:-1]]  # counter-clockwise, like the template sites
 
 
-def _inset(shape: ShapelyPolygon, distance: float) -> tuple[ShapelyPolygon | None, bool]:
-    """Inset with sharp corners, drop slivers, keep one part.
-
-    Returns the kept part (None if nothing is left) and whether the footprint split.
-    """
+def _inset(shape: ShapelyPolygon | MultiPolygon, distance: float) -> list[ShapelyPolygon]:
+    """Inset with sharp corners and drop slivers; the parts leftmost first, then lowest."""
     parts = [part for part in get_parts(shape.buffer(-distance, join_style="mitre")) if part.area >= _SLIVER_M2]
-    if not parts:
-        return None, False
-    largest = max(part.area for part in parts)
-    tied = [part for part in parts if part.area >= largest - _AREA_TOLERANCE_M2]
-    kept = min(tied, key=lambda part: (part.bounds[0], part.bounds[1]))  # leftmost, then lowest
-    return kept, len(parts) > 1
+    return sorted(parts, key=lambda part: (part.bounds[0], part.bounds[1]))
 
 
-def _compute_footprint(site: ShapelyPolygon, constraints: Constraints) -> tuple[ShapelyPolygon | None, bool]:
-    """The setback, then the additional inset for site coverage."""
-    footprint, split = _inset(site, constraints.setback_m)
-    if footprint is None or constraints.site_coverage_ratio is None:
-        return footprint, split
+def _area(parts: list[ShapelyPolygon]) -> float:
+    return sum(part.area for part in parts)
+
+
+def _compute_footprints(site: ShapelyPolygon, constraints: Constraints) -> list[ShapelyPolygon]:
+    """The setback, then the additional inset for site coverage; one part per building."""
+    parts = _inset(site, constraints.setback_m)
+    if not parts or constraints.site_coverage_ratio is None:
+        return parts
     allowed = constraints.site_coverage_ratio * site.area
-    if footprint.area <= allowed:
-        return footprint, split
-    # Binary search for the smallest inset that brings the area under the limit.
+    if _area(parts) <= allowed:
+        return parts
+    # Binary search for the smallest inset that brings the total area under the limit.
     # Insetting by half of the smaller bounding-box side always leaves nothing, so `hi` fits.
     # The step count is capped: on an astronomic site the halving stalls at float precision short of the tolerance.
+    footprint = MultiPolygon(parts)
     min_x, min_y, max_x, max_y = footprint.bounds
     lo, hi = 0.0, min(max_x - min_x, max_y - min_y) / 2
     for _step in range(_INSET_SEARCH_STEPS):
         if hi - lo <= _INSET_PRECISION_M:
             break
         mid = (lo + hi) / 2
-        part, _ = _inset(footprint, mid)
-        if part is None or part.area <= allowed:
+        if _area(_inset(footprint, mid)) <= allowed:
             hi = mid
         else:
             lo = mid
-    part, split_again = _inset(footprint, hi)
-    return part, split or split_again
+    return _inset(footprint, hi)
 
 
 def _floor_count(constraints: Constraints) -> int:
@@ -137,16 +136,20 @@ def _floor_count(constraints: Constraints) -> int:
     return min(limits)
 
 
-def derive(site: Polygon, constraints: Constraints, footprint: Polygon | None, split: bool) -> MassingResult:
-    """Metrics and verdict for a footprint under the constraints.
+def derive(site: Polygon, constraints: Constraints, footprints: list[Polygon]) -> MassingResult:
+    """Buildings, metrics and verdict for the footprints under the constraints.
 
-    The inputs are trusted: a valid site and a footprint produced by this module.
+    The inputs are trusted: a valid site and footprints produced by this module.
     """
     site_area = ShapelyPolygon(site).area
-    area = ShapelyPolygon(footprint).area if footprint else 0.0
+    buildings = [
+        Building(footprint=footprint, footprint_area_m2=ShapelyPolygon(footprint).area) for footprint in footprints
+    ]
+    area = sum(building.footprint_area_m2 for building in buildings)
     floors = _floor_count(constraints)
     gfa = area * floors
     metrics = Metrics(
+        building_count=len(buildings),
         footprint_area_m2=area,
         floor_count=floors,
         height_m=floors * constraints.floor_to_floor_m,
@@ -157,15 +160,14 @@ def derive(site: Polygon, constraints: Constraints, footprint: Polygon | None, s
     verdict: Verdict = "ok"
     reason: Reason | None = None
     shortfall: float | None = None
-    if footprint is None:
+    if not buildings:
         verdict, reason = "infeasible", "footprint_collapsed"
     elif floors == 0:
         verdict, reason = "infeasible", "zero_floors"
     elif constraints.gfa_target_m2 is not None and gfa < constraints.gfa_target_m2:
         verdict, shortfall = "gfa_missed", constraints.gfa_target_m2 - gfa
     return MassingResult(
-        footprint=footprint,
-        footprint_split=split,
+        buildings=buildings,
         metrics=metrics,
         verdict=verdict,
         gfa_shortfall_m2=shortfall,
@@ -175,5 +177,4 @@ def derive(site: Polygon, constraints: Constraints, footprint: Polygon | None, s
 
 def compute_massing(polygon: Polygon, constraints: Constraints) -> MassingResult:
     site = _to_shape(polygon)
-    footprint, split = _compute_footprint(site, constraints)
-    return derive(polygon, constraints, _to_polygon(footprint) if footprint else None, split)
+    return derive(polygon, constraints, [_to_polygon(part) for part in _compute_footprints(site, constraints)])

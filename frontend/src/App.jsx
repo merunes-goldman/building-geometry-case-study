@@ -226,8 +226,8 @@ export default function App() {
         />
         <Plan
           site={site}
-          footprint={result?.footprint}
-          parentFootprint={showParent ? parent?.result.footprint : null}
+          buildings={result?.buildings}
+          parentBuildings={showParent ? parent?.result.buildings : null}
           recomputing={pendingPreviews > 0 && edited}
         />
         <Inspector

@@ -95,8 +95,17 @@ async def test_an_infeasible_result_is_saved_like_any_other(client: AsyncClient)
     site_id = await _site_id(client, "notched")
     option = (await client.post(f"/sites/{site_id}/options", json={"constraints": _INFEASIBLE})).json()
     assert option["result"]["verdict"] == "infeasible" and option["result"]["reason"] == "footprint_collapsed"
-    assert option["result"]["footprint"] is None
+    assert option["result"]["buildings"] == []
     assert (await client.get(f"/options/{option['id']}")).status_code == 200
+
+
+async def test_two_buildings_are_stored_and_read_back(client: AsyncClient):
+    site_id = await _site_id(client, "notched")
+    split = {**_MODEST, "setback_m": 4}  # the setback eats the neck: a building on each of the two parts
+    option = (await client.post(f"/sites/{site_id}/options", json={"constraints": split})).json()
+    assert option["result"]["metrics"]["building_count"] == 2
+    assert [building["footprint"][0] for building in option["result"]["buildings"]] == [[4, 4], [34, 4]]
+    assert (await client.get(f"/options/{option['id']}")).json() == option
 
 
 async def test_preview_computes_without_writing(client: AsyncClient):

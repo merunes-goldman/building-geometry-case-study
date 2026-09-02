@@ -19,7 +19,7 @@ _SCHEMA = (Path(__file__).parent / "schema.sql").read_bytes()  # bytes: psycopg 
 def _option(row: DictRow) -> Option:
     """Metrics and the verdict are not stored: they are derived from the row on every read."""
     constraints = Constraints.model_validate(row)
-    result = derive(row["site_polygon"], constraints, row["footprint"], row["footprint_split"])
+    result = derive(row["site_polygon"], constraints, row["footprints"])
     return Option.model_validate({**row, "constraints": constraints, "result": result})
 
 
@@ -72,8 +72,8 @@ async def insert_option(conn: AsyncConnection[DictRow], site: Site, body: Option
     cursor = await conn.execute(
         """
         INSERT INTO options (site_id, parent_id, name, setback_m, floor_to_floor_m, max_height_m, max_floors,
-                             site_coverage_ratio, gfa_target_m2, footprint, footprint_split)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                             site_coverage_ratio, gfa_target_m2, footprints)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING *
         """,
         (
@@ -86,8 +86,7 @@ async def insert_option(conn: AsyncConnection[DictRow], site: Site, body: Option
             constraints.max_floors,
             constraints.site_coverage_ratio,
             constraints.gfa_target_m2,
-            Jsonb(result.footprint) if result.footprint is not None else None,
-            result.footprint_split,
+            Jsonb([building.footprint for building in result.buildings]),
         ),
     )
     return _option({**(await cursor.fetchall())[0], "site_polygon": site.polygon})

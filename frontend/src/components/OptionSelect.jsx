@@ -30,6 +30,12 @@ function treeRows(options) {
   return rows;
 }
 
+// The numbers of a row; the building count only when there is more than one.
+function summary({ gfa_m2, floor_count, building_count }) {
+  const line = `GFA ${formatNumber(gfa_m2, 0)} m2, ${floor_count} floors`;
+  return building_count > 1 ? `${line}, ${building_count} buildings` : line;
+}
+
 // What the form shows: the selected option's snapshot, the draft that branches from it, or a fresh root.
 function shownValue(selected, edited) {
   if (!selected) {
@@ -76,7 +82,7 @@ export default function OptionSelect({
           >
             <ListItemText
               primary={option.name || "unnamed"}
-              secondary={`GFA ${formatNumber(option.result.metrics.gfa_m2, 0)} m2, ${option.result.metrics.floor_count} floors`}
+              secondary={summary(option.result.metrics)}
             />
             <Chip
               size="small"
